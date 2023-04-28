@@ -71,8 +71,8 @@ A deposit has the following fields.
   deposited transaction is a contract creation.
 - `uint256 mint`: The ETH value to mint on L2.
 - `uint256 value`: The ETH value to send to the recipient account.
-- `bytes data`: The input data.
-- `uint64 gasLimit`: The gasLimit for the L2 transaction.
+- `uint64 gas`: The gas limit for the L2 transaction.
+- `bytes data`: The calldata.
 
 In contrast to [EIP-155] transactions, this transaction type:
 
