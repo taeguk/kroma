@@ -8,6 +8,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum-optimism/optimism/op-bindings/bindings"
+	"github.com/ethereum-optimism/optimism/op-bindings/predeploys"
+	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils"
+	"github.com/ethereum-optimism/optimism/op-e2e/testdata"
+	"github.com/ethereum-optimism/optimism/op-node/client"
+	"github.com/ethereum-optimism/optimism/op-node/eth"
+	"github.com/ethereum-optimism/optimism/op-node/metrics"
+	rollupNode "github.com/ethereum-optimism/optimism/op-node/node"
+	"github.com/ethereum-optimism/optimism/op-node/p2p"
+	"github.com/ethereum-optimism/optimism/op-node/rollup"
+	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
+	"github.com/ethereum-optimism/optimism/op-node/rollup/driver"
+	"github.com/ethereum-optimism/optimism/op-node/sources"
+	"github.com/ethereum-optimism/optimism/op-node/testlog"
+	opprof "github.com/ethereum-optimism/optimism/op-service/pprof"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
@@ -22,20 +37,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ethereum-optimism/optimism/op-bindings/bindings"
-	"github.com/ethereum-optimism/optimism/op-bindings/predeploys"
-	"github.com/ethereum-optimism/optimism/op-node/client"
-	"github.com/ethereum-optimism/optimism/op-node/eth"
-	"github.com/ethereum-optimism/optimism/op-node/metrics"
-	rollupNode "github.com/ethereum-optimism/optimism/op-node/node"
-	"github.com/ethereum-optimism/optimism/op-node/p2p"
-	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
-	"github.com/ethereum-optimism/optimism/op-node/rollup/driver"
-	"github.com/ethereum-optimism/optimism/op-node/sources"
-	"github.com/ethereum-optimism/optimism/op-node/testlog"
-	"github.com/ethereum-optimism/optimism/op-e2e/testdata"
-	"github.com/ethereum-optimism/optimism/op-node/rollup"
-	opprof "github.com/ethereum-optimism/optimism/op-service/pprof"
 	val "github.com/kroma-network/kroma/components/validator"
 	chal "github.com/kroma-network/kroma/components/validator/challenge"
 )
@@ -462,6 +463,9 @@ func TestMissingBatchE2E(t *testing.T) {
 
 	l2Seq := sys.Clients["sequencer"]
 	l2Verif := sys.Clients["verifier"]
+	seqRollupRPCClient, err := rpc.DialContext(context.Background(), sys.RollupNodes["sequencer"].HTTPEndpoint())
+	require.Nil(t, err)
+	seqRollupClient := sources.NewRollupClient(client.NewBaseRPCClient(seqRollupRPCClient))
 
 	// Transactor Account
 	ethPrivKey := cfg.Secrets.Alice
@@ -483,8 +487,8 @@ func TestMissingBatchE2E(t *testing.T) {
 	require.Equal(t, ethereum.NotFound, err, "Found transaction in verifier when it should not have been included")
 
 	// Wait a short time for the L2 reorg to occur on the sequencer as well.
-	// The proper thing to do is to wait until the sequencer marks this block safe.
-	<-time.After(2 * time.Second)
+	err = e2eutils.WaitForSafeHead(ctx, receipt.BlockNumber.Uint64(), seqRollupClient)
+	require.Nil(t, err, "timeout waiting for L2 reorg on sequencer safe head")
 
 	// Assert that the reconciliation process did an L2 reorg on the sequencer to remove the invalid block
 	ctx2, cancel := context.WithTimeout(context.Background(), time.Second)
