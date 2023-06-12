@@ -2,6 +2,7 @@ package genesis
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 	"time"
 
@@ -74,11 +75,21 @@ func NewL2Genesis(config *DeployConfig, block *types.Block, zktrie bool) (*core.
 		difficulty = newHexBig(0)
 	}
 
+	extraData := config.L2GenesisBlockExtraData
+	if extraData == nil {
+		// L2GenesisBlockExtraData is optional, so use a default value when nil
+		extraData = BedrockTransitionBlockExtraData
+	}
+	// Ensure that the extradata is valid
+	if size := len(extraData); size > 32 {
+		return nil, fmt.Errorf("transition block extradata too long: %d", size)
+	}
+
 	return &core.Genesis{
 		Config:     &kromaChainConfig,
 		Nonce:      uint64(config.L2GenesisBlockNonce),
 		Timestamp:  block.Time(),
-		ExtraData:  []byte{},
+		ExtraData:  extraData,
 		GasLimit:   uint64(gasLimit),
 		Difficulty: difficulty.ToInt(),
 		Mixhash:    config.L2GenesisBlockMixHash,
