@@ -14,7 +14,7 @@ import (
 
 	kservice "github.com/kroma-network/kroma/utils/service"
 	kcrypto "github.com/kroma-network/kroma/utils/service/crypto"
-	"github.com/kroma-network/kroma/utils/signer/client"
+	ksigner "github.com/kroma-network/kroma/utils/signer"
 )
 
 const (
@@ -32,83 +32,140 @@ const (
 	TxSendTimeoutFlagName             = "txmgr.send-timeout"
 	TxNotInMempoolTimeoutFlagName     = "txmgr.not-in-mempool-timeout"
 	ReceiptQueryIntervalFlagName      = "txmgr.receipt-query-interval"
-	BufferSizeFlagName                = "txmgr.buffer-size"
+)
+
+var (
+	SequencerHDPathFlag = &cli.StringFlag{
+		Name: "sequencer-hd-path",
+		Usage: "DEPRECATED: The HD path used to derive the sequencer wallet from the " +
+			"mnemonic. The mnemonic flag must also be set.",
+		EnvVars: []string{"OP_BATCHER_SEQUENCER_HD_PATH"},
+	}
+	L2OutputHDPathFlag = &cli.StringFlag{
+		Name: "l2-output-hd-path",
+		Usage: "DEPRECATED:The HD path used to derive the l2output wallet from the " +
+			"mnemonic. The mnemonic flag must also be set.",
+		EnvVars: []string{"OP_PROPOSER_L2_OUTPUT_HD_PATH"},
+	}
+	BufferSizeFlagName = "txmgr.buffer-size"
+)
+
+type DefaultFlagValues struct {
+	NumConfirmations          uint64
+	SafeAbortNonceTooLowCount uint64
+	TxBufferSize              uint64
+	ResubmissionTimeout       time.Duration
+	NetworkTimeout            time.Duration
+	TxSendTimeout             time.Duration
+	TxNotInMempoolTimeout     time.Duration
+	ReceiptQueryInterval      time.Duration
+}
+
+var (
+	DefaultBatcherFlagValues = DefaultFlagValues{
+		NumConfirmations:          uint64(10),
+		SafeAbortNonceTooLowCount: uint64(3),
+		TxBufferSize:              uint64(10),
+		ResubmissionTimeout:       48 * time.Second,
+		NetworkTimeout:            10 * time.Second,
+		TxSendTimeout:             0 * time.Second,
+		TxNotInMempoolTimeout:     2 * time.Minute,
+		ReceiptQueryInterval:      12 * time.Second,
+	}
+	DefaultChallengerFlagValues = DefaultFlagValues{
+		NumConfirmations:          uint64(3),
+		SafeAbortNonceTooLowCount: uint64(3),
+		ResubmissionTimeout:       24 * time.Second,
+		NetworkTimeout:            10 * time.Second,
+		TxSendTimeout:             2 * time.Minute,
+		TxNotInMempoolTimeout:     1 * time.Minute,
+		ReceiptQueryInterval:      12 * time.Second,
+	}
 )
 
 func CLIFlags(envPrefix string) []cli.Flag {
+	return CLIFlagsWithDefaults(envPrefix, DefaultBatcherFlagValues)
+}
+
+func CLIFlagsWithDefaults(envPrefix string, defaults DefaultFlagValues) []cli.Flag {
+	prefixEnvVars := func(name string) []string {
+		return kservice.PrefixEnvVar(envPrefix, name)
+	}
 	return append([]cli.Flag{
 		&cli.StringFlag{
 			Name:    MnemonicFlagName,
 			Usage:   "The mnemonic used to derive the wallets for either the service",
-			EnvVars: kservice.PrefixEnvVar(envPrefix, "MNEMONIC"),
+			EnvVars: prefixEnvVars("MNEMONIC"),
 		},
 		&cli.StringFlag{
 			Name:    HDPathFlagName,
-			Usage:   "The HD path used to derive the wallet from the mnemonic. The mnemonic flag must also be set.",
-			EnvVars: kservice.PrefixEnvVar(envPrefix, "HD_PATH"),
+			Usage:   "The HD path used to derive the sequencer wallet from the mnemonic. The mnemonic flag must also be set.",
+			EnvVars: prefixEnvVars("HD_PATH"),
 		},
 		&cli.StringFlag{
-			Name:    "private-key",
+			Name:    PrivateKeyFlagName,
 			Usage:   "The private key to use with the service. Must not be used with mnemonic.",
-			EnvVars: kservice.PrefixEnvVar(envPrefix, "PRIVATE_KEY"),
+			EnvVars: prefixEnvVars("PRIVATE_KEY"),
 		},
 		&cli.Uint64Flag{
 			Name:    NumConfirmationsFlagName,
 			Usage:   "Number of confirmations which we will wait after sending a transaction",
-			Value:   10,
-			EnvVars: kservice.PrefixEnvVar(envPrefix, "NUM_CONFIRMATIONS"),
+			Value:   defaults.NumConfirmations,
+			EnvVars: prefixEnvVars("NUM_CONFIRMATIONS"),
 		},
 		&cli.Uint64Flag{
 			Name:    SafeAbortNonceTooLowCountFlagName,
 			Usage:   "Number of ErrNonceTooLow observations required to give up on a tx at a particular nonce without receiving confirmation",
-			Value:   3,
-			EnvVars: kservice.PrefixEnvVar(envPrefix, "SAFE_ABORT_NONCE_TOO_LOW_COUNT"),
+			Value:   defaults.SafeAbortNonceTooLowCount,
+			EnvVars: prefixEnvVars("SAFE_ABORT_NONCE_TOO_LOW_COUNT"),
 		},
 		&cli.DurationFlag{
 			Name:    ResubmissionTimeoutFlagName,
 			Usage:   "Duration we will wait before resubmitting a transaction to L1",
-			Value:   48 * time.Second,
-			EnvVars: kservice.PrefixEnvVar(envPrefix, "RESUBMISSION_TIMEOUT"),
+			Value:   defaults.ResubmissionTimeout,
+			EnvVars: prefixEnvVars("RESUBMISSION_TIMEOUT"),
 		},
 		&cli.DurationFlag{
 			Name:    NetworkTimeoutFlagName,
 			Usage:   "Timeout for all network operations",
-			Value:   2 * time.Second,
-			EnvVars: kservice.PrefixEnvVar(envPrefix, "NETWORK_TIMEOUT"),
+			Value:   defaults.NetworkTimeout,
+			EnvVars: prefixEnvVars("NETWORK_TIMEOUT"),
 		},
 		&cli.DurationFlag{
 			Name:    TxSendTimeoutFlagName,
 			Usage:   "Timeout for sending transactions. If 0 it is disabled.",
-			Value:   0,
-			EnvVars: kservice.PrefixEnvVar(envPrefix, "TXMGR_TX_SEND_TIMEOUT"),
+			Value:   defaults.TxSendTimeout,
+			EnvVars: prefixEnvVars("TXMGR_TX_SEND_TIMEOUT"),
 		},
 		&cli.DurationFlag{
 			Name:    TxNotInMempoolTimeoutFlagName,
 			Usage:   "Timeout for aborting a tx send if the tx does not make it to the mempool.",
-			Value:   2 * time.Minute,
-			EnvVars: kservice.PrefixEnvVar(envPrefix, "TXMGR_TX_NOT_IN_MEMPOOL_TIMEOUT"),
+			Value:   defaults.TxNotInMempoolTimeout,
+			EnvVars: prefixEnvVars("TXMGR_TX_NOT_IN_MEMPOOL_TIMEOUT"),
 		},
 		&cli.DurationFlag{
 			Name:    ReceiptQueryIntervalFlagName,
 			Usage:   "Frequency to poll for receipts",
-			Value:   12 * time.Second,
-			EnvVars: kservice.PrefixEnvVar(envPrefix, "TXMGR_RECEIPT_QUERY_INTERVAL"),
+			Value:   defaults.ReceiptQueryInterval,
+			EnvVars: prefixEnvVars("TXMGR_RECEIPT_QUERY_INTERVAL"),
 		},
 		&cli.Uint64Flag{
 			Name:    BufferSizeFlagName,
 			Usage:   "Tx buffer size for buffered txmgr",
 			Value:   10,
-			EnvVars: kservice.PrefixEnvVar(envPrefix, "TXMGR_BUFFER_SIZE"),
+			EnvVars: prefixEnvVars("TXMGR_BUFFER_SIZE"),
 		},
-	}, client.CLIFlags(envPrefix)...)
+	}, ksigner.CLIFlags(envPrefix)...)
 }
 
 type CLIConfig struct {
 	L1RPCURL                  string
 	Mnemonic                  string
 	HDPath                    string
+	SequencerHDPath           string
+	L2OutputHDPath            string
 	PrivateKey                string
-	SignerCLIConfig           client.CLIConfig
+	SignerCLIConfig           ksigner.CLIConfig
 	NumConfirmations          uint64
 	SafeAbortNonceTooLowCount uint64
 	TxBufferSize              uint64
@@ -117,6 +174,21 @@ type CLIConfig struct {
 	NetworkTimeout            time.Duration
 	TxSendTimeout             time.Duration
 	TxNotInMempoolTimeout     time.Duration
+}
+
+func NewCLIConfig(l1RPCURL string, defaults DefaultFlagValues) CLIConfig {
+	return CLIConfig{
+		L1RPCURL:                  l1RPCURL,
+		NumConfirmations:          defaults.NumConfirmations,
+		SafeAbortNonceTooLowCount: defaults.SafeAbortNonceTooLowCount,
+		TxBufferSize:              defaults.TxBufferSize,
+		ResubmissionTimeout:       defaults.ResubmissionTimeout,
+		NetworkTimeout:            defaults.NetworkTimeout,
+		TxSendTimeout:             defaults.TxSendTimeout,
+		TxNotInMempoolTimeout:     defaults.TxNotInMempoolTimeout,
+		ReceiptQueryInterval:      defaults.ReceiptQueryInterval,
+		SignerCLIConfig:           ksigner.NewCLIConfig(),
+	}
 }
 
 func (m CLIConfig) Check() error {
@@ -152,8 +224,10 @@ func ReadCLIConfig(ctx *cli.Context) CLIConfig {
 		L1RPCURL:                  ctx.String(L1RPCFlagName),
 		Mnemonic:                  ctx.String(MnemonicFlagName),
 		HDPath:                    ctx.String(HDPathFlagName),
+		SequencerHDPath:           ctx.String(SequencerHDPathFlag.Name),
+		L2OutputHDPath:            ctx.String(L2OutputHDPathFlag.Name),
 		PrivateKey:                ctx.String(PrivateKeyFlagName),
-		SignerCLIConfig:           client.ReadCLIConfig(ctx),
+		SignerCLIConfig:           ksigner.ReadCLIConfig(ctx),
 		NumConfirmations:          ctx.Uint64(NumConfirmationsFlagName),
 		SafeAbortNonceTooLowCount: ctx.Uint64(SafeAbortNonceTooLowCountFlagName),
 		ResubmissionTimeout:       ctx.Duration(ResubmissionTimeoutFlagName),
@@ -184,7 +258,15 @@ func NewConfig(cfg CLIConfig, l log.Logger) (Config, error) {
 		return Config{}, fmt.Errorf("could not dial fetch L1 chain ID: %w", err)
 	}
 
-	signerFactory, from, err := kcrypto.SignerFactoryFromConfig(l, cfg.PrivateKey, cfg.Mnemonic, cfg.HDPath, cfg.SignerCLIConfig)
+	// Allow backwards compatible ways of specifying the HD path
+	hdPath := cfg.HDPath
+	if hdPath == "" && cfg.SequencerHDPath != "" {
+		hdPath = cfg.SequencerHDPath
+	} else if hdPath == "" && cfg.L2OutputHDPath != "" {
+		hdPath = cfg.L2OutputHDPath
+	}
+
+	signerFactory, from, err := kcrypto.SignerFactoryFromConfig(l, cfg.PrivateKey, cfg.Mnemonic, hdPath, cfg.SignerCLIConfig)
 	if err != nil {
 		return Config{}, fmt.Errorf("could not init signer: %w", err)
 	}
@@ -250,4 +332,35 @@ type Config struct {
 	// Signer is used to sign transactions when the gas price is increased.
 	Signer kcrypto.SignerFn
 	From   common.Address
+}
+
+func (m Config) Check() error {
+	if m.Backend == nil {
+		return errors.New("must provide the Backend")
+	}
+	if m.NumConfirmations == 0 {
+		return errors.New("NumConfirmations must not be 0")
+	}
+	if m.NetworkTimeout == 0 {
+		return errors.New("must provide NetworkTimeout")
+	}
+	if m.ResubmissionTimeout == 0 {
+		return errors.New("must provide ResubmissionTimeout")
+	}
+	if m.ReceiptQueryInterval == 0 {
+		return errors.New("must provide ReceiptQueryInterval")
+	}
+	if m.TxNotInMempoolTimeout == 0 {
+		return errors.New("must provide TxNotInMempoolTimeout")
+	}
+	if m.SafeAbortNonceTooLowCount == 0 {
+		return errors.New("SafeAbortNonceTooLowCount must not be 0")
+	}
+	if m.Signer == nil {
+		return errors.New("must provide the Signer")
+	}
+	if m.ChainID == nil {
+		return errors.New("must provide the ChainID")
+	}
+	return nil
 }

@@ -9,11 +9,13 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 
+	kcrypto "github.com/kroma-network/kroma/utils/service/crypto"
 	"github.com/kroma-network/kroma/utils/service/txmgr/metrics"
 )
 
 type BufferedTxManager struct {
 	SimpleTxManager // directly embed
+	Signer          kcrypto.SignerFn
 	wg              sync.WaitGroup
 	txRequestChan   chan *TxRequest
 	ctx             context.Context
@@ -39,11 +41,12 @@ func NewBufferedTxManager(name string, l log.Logger, m metrics.TxMetricer, cfg C
 
 	return &BufferedTxManager{
 		SimpleTxManager: *simpleTxManager,
+		Signer:          simpleTxManager.cfg.Signer,
 	}, nil
 }
 
 func (m *BufferedTxManager) Start(ctx context.Context) error {
-	m.txRequestChan = make(chan *TxRequest, m.Config.TxBufferSize)
+	m.txRequestChan = make(chan *TxRequest, m.cfg.TxBufferSize)
 	m.ctx, m.cancel = context.WithCancel(ctx)
 	m.wg.Add(1)
 	go m.listen(m.ctx)

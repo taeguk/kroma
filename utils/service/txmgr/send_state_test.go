@@ -5,14 +5,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
-	"github.com/stretchr/testify/require"
 
 	"github.com/kroma-network/kroma/utils/service/txmgr"
 )
 
-var testHash = common.HexToHash("0x01")
+var (
+	testHash = common.HexToHash("0x01")
+)
 
 const testSafeAbortNonceTooLowCount = 3
 
@@ -185,5 +188,5 @@ func TestSendStateTimeoutAbort(t *testing.T) {
 func TestSendStateNoTimeoutAbortIfPublishedTx(t *testing.T) {
 	sendState := newSendStateWithTimeout(10*time.Millisecond, stepClock(20*time.Millisecond))
 	sendState.ProcessSendError(nil)
-	require.False(t, sendState.ShouldAbortImmediately(), "Should not abort if published transaction successfully")
+	require.False(t, sendState.ShouldAbortImmediately(), "Should not abort if published transcation successfully")
 }

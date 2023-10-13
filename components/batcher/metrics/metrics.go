@@ -101,7 +101,7 @@ func NewMetrics(procName string) *Metrics {
 			Help:      "1 if the kroma-batcher has finished starting up",
 		}),
 
-		ChannelEvs: kmetrics.NewEventVec(factory, ns, "channel", "Channel", []string{"stage"}),
+		ChannelEvs: kmetrics.NewEventVec(factory, ns, "", "channel", "Channel", []string{"stage"}),
 
 		PendingBlocksCount: *factory.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: ns,
@@ -151,7 +151,7 @@ func NewMetrics(procName string) *Metrics {
 			Help:      "Compression ratios of closed channel.",
 		}),
 
-		BatcherTxEvs: kmetrics.NewEventVec(factory, ns, "batcher_tx", "BatcherTx", []string{"stage"}),
+		BatcherTxEvs: kmetrics.NewEventVec(factory, ns, "", "batcher_tx", "BatcherTx", []string{"stage"}),
 	}
 }
 

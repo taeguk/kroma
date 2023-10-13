@@ -17,7 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 
-	ksigner "github.com/kroma-network/kroma/utils/signer/client"
+	signer2 "github.com/kroma-network/kroma/utils/signer"
 )
 
 func PrivateKeySignerFn(key *ecdsa.PrivateKey, chainID *big.Int) bind.SignerFn {
@@ -45,11 +45,11 @@ type SignerFactory func(chainID *big.Int) SignerFn
 // SignerFactoryFromConfig considers three ways that signers are created & then creates single factory from those config options.
 // It can either take a remote signer (via ksigner.CLIConfig) or it can be provided either a mnemonic + derivation path or a private key.
 // It prefers the remote signer, to the mnemonic or private key (only one of which can be provided).
-func SignerFactoryFromConfig(l log.Logger, privateKey, mnemonic, hdPath string, signerConfig ksigner.CLIConfig) (SignerFactory, common.Address, error) {
+func SignerFactoryFromConfig(l log.Logger, privateKey, mnemonic, hdPath string, signerConfig signer2.CLIConfig) (SignerFactory, common.Address, error) {
 	var signer SignerFactory
 	var fromAddress common.Address
 	if signerConfig.Enabled() {
-		signerClient, err := ksigner.NewSignerClientFromConfig(l, signerConfig)
+		signerClient, err := signer2.NewSignerClientFromConfig(l, signerConfig)
 		if err != nil {
 			l.Error("Unable to create Signer Client", "error", err)
 			return nil, common.Address{}, fmt.Errorf("failed to create the signer client: %w", err)

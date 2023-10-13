@@ -700,7 +700,7 @@ func TestSystemMockP2P(t *testing.T) {
 	syncerPeerID := sys.RollupNodes["syncer"].P2P().Host().ID()
 	check := func() bool {
 		proposerBlocksTopicPeers := sys.RollupNodes["proposer"].P2P().GossipOut().BlocksTopicPeers()
-		return slices.Contains[peer.ID](proposerBlocksTopicPeers, syncerPeerID)
+		return slices.Contains[[]peer.ID](proposerBlocksTopicPeers, syncerPeerID)
 	}
 
 	// poll to see if the validator node is connected & meshed on gossip.

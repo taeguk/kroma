@@ -1,4 +1,4 @@
-package client
+package signer
 
 import (
 	"errors"
@@ -36,6 +36,12 @@ type CLIConfig struct {
 	Endpoint  string
 	Address   string
 	TLSConfig ktls.CLIConfig
+}
+
+func NewCLIConfig() CLIConfig {
+	return CLIConfig{
+		TLSConfig: ktls.NewCLIConfig(),
+	}
 }
 
 func (c CLIConfig) Check() error {

@@ -1,4 +1,4 @@
-package client
+package signer
 
 import (
 	"context"
@@ -37,7 +37,7 @@ func NewSignerClient(logger log.Logger, endpoint string, tlsConfig ktls.CLIConfi
 		caCertPool := x509.NewCertPool()
 		caCertPool.AppendCertsFromPEM(caCert)
 
-		// certman watches for newer client certificates and automatically reloads them
+		// certman watches for newer client certifictes and automatically reloads them
 		cm, err := certman.New(logger, tlsConfig.TLSCert, tlsConfig.TLSKey)
 		if err != nil {
 			logger.Error("failed to read tls cert or key", "err", err)

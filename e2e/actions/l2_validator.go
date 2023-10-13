@@ -60,6 +60,21 @@ func NewL2Validator(t Testing, log log.Logger, cfg *ValidatorCfg, l1 *ethclient.
 	chainID, err := l1.ChainID(t.Ctx())
 	require.NoError(t, err)
 
+	txManager, err := txmgr.NewSimpleTxManagerFromConfig("validator", log, validatormetrics.NoopMetrics, txmgr.Config{
+		Backend:                   l1,
+		ResubmissionTimeout:       1,
+		ChainID:                   chainID,
+		TxSendTimeout:             1,
+		TxNotInMempoolTimeout:     1,
+		NetworkTimeout:            1,
+		ReceiptQueryInterval:      1,
+		NumConfirmations:          1,
+		SafeAbortNonceTooLowCount: 1,
+		TxBufferSize:              1,
+		Signer:                    signer(chainID),
+		From:                      from,
+	})
+
 	rollupConfig, err := rollupCl.RollupConfig(t.Ctx())
 	require.NoError(t, err)
 
@@ -81,12 +96,8 @@ func NewL2Validator(t Testing, log log.Logger, cfg *ValidatorCfg, l1 *ethclient.
 		ProofFetcher:                    e2eutils.NewFetcher(log, "../testdata/proof"),
 		// We use custom signing here instead of using the transaction manager.
 		TxManager: &txmgr.BufferedTxManager{
-			SimpleTxManager: txmgr.SimpleTxManager{
-				Config: txmgr.Config{
-					From:   from,
-					Signer: signer(chainID),
-				},
-			},
+			SimpleTxManager: *txManager,
+			Signer:          signer(chainID),
 		},
 	}
 
