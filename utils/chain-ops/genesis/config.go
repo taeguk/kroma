@@ -130,6 +130,11 @@ type DeployConfig struct {
 	EIP1559Denominator uint64 `json:"eip1559Denominator"`
 
 	FundDevAccounts bool `json:"fundDevAccounts"`
+
+	// When Cancun activates. Relative to L1 genesis.
+	L1CancunTimeOffset *uint64 `json:"l1CancunTimeOffset,omitempty"`
+	// When 4844 blob-tx functionality for rollup DA actives. Relative to L2 genesis.
+	L2BlobsUpgradeTimeOffset *uint64 `json:"l2BlobsUpgradeTimeOffset,omitempty"`
 }
 
 // Check will ensure that the config is sane and return an error when it is not
@@ -335,6 +340,17 @@ func (d *DeployConfig) GetDeployedAddresses(hh *hardhat.Hardhat) error {
 	return nil
 }
 
+func (d *DeployConfig) BlobsUpgradeTime(genesisTime uint64) *uint64 {
+	if d.L2BlobsUpgradeTimeOffset == nil {
+		return nil
+	}
+	v := uint64(0)
+	if offset := *d.L2BlobsUpgradeTimeOffset; offset > 0 {
+		v = genesisTime + uint64(offset)
+	}
+	return &v
+}
+
 // InitDeveloperDeployedAddresses will set the dev addresses on the DeployConfig
 func (d *DeployConfig) InitDeveloperDeployedAddresses() error {
 	d.L1StandardBridgeProxy = predeploys.DevL1StandardBridgeAddr
@@ -383,6 +399,8 @@ func (d *DeployConfig) RollupConfig(l1StartBlock *types.Block, l2GenesisBlockHas
 		BatchInboxAddress:      d.BatchInboxAddress,
 		DepositContractAddress: d.KromaPortalProxy,
 		L1SystemConfigAddress:  d.SystemConfigProxy,
+		// 4844 blobs usage activation for rollup DA
+		BlobsEnabledL1Timestamp: d.BlobsUpgradeTime(l1StartBlock.Time()),
 	}, nil
 }
 

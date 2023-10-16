@@ -14,6 +14,7 @@ import (
 	"github.com/urfave/cli/v2"
 
 	"github.com/kroma-network/kroma/components/batcher/metrics"
+	"github.com/kroma-network/kroma/components/node/eth"
 	"github.com/kroma-network/kroma/utils"
 	"github.com/kroma-network/kroma/utils/monitoring"
 	klog "github.com/kroma-network/kroma/utils/service/log"
@@ -252,6 +253,19 @@ func (b *Batcher) submitBatch(ctx context.Context) error {
 // It currently uses the underlying `txmgr` to handle transaction sending & price management.
 // This is a blocking method. It should not be called concurrently.
 func (b *Batcher) sendTransaction(ctx context.Context, data []byte) (*types.Receipt, error) {
+	var blobs []*eth.Blob
+	if b.cfg.Rollup.BlobsEnabledL1Timestamp != nil && *b.cfg.Rollup.BlobsEnabledL1Timestamp <= uint64(time.Now().Unix()) {
+		var b eth.Blob
+		if err := b.FromData(data); err != nil {
+			log.Error("data could not be converted to blob", "err", err)
+			return nil, err
+		}
+		blobs = append(blobs, &b)
+
+		// no calldata
+		data = []byte{}
+	}
+
 	// Do the gas estimation offline. A value of 0 will cause the [txmgr] to estimate the gas limit.
 	intrinsicGas, err := core.IntrinsicGas(data, nil, false, true, true, false)
 	if err != nil {
@@ -263,6 +277,7 @@ func (b *Batcher) sendTransaction(ctx context.Context, data []byte) (*types.Rece
 		To:       &b.batchSubmitter.Rollup.BatchInboxAddress,
 		TxData:   data,
 		GasLimit: intrinsicGas,
+		Blobs:    blobs,
 	})
 	if err != nil {
 		b.l.Error("batcher unable to publish tx", "err", err)

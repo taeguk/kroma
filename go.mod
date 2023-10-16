@@ -183,4 +183,4 @@ require (
 	rsc.io/tmplfunc v0.0.3 // indirect
 )
 
-replace github.com/ethereum/go-ethereum v1.11.5 => github.com/kroma-network/go-ethereum v0.1.1-0.20231013103029-d1726c0273f9
+replace github.com/ethereum/go-ethereum v1.11.5 => github.com/kroma-network/go-ethereum v0.1.1-0.20231018094446-7d15fde4e603
