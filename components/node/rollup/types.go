@@ -247,8 +247,8 @@ func (cfg *Config) Check() error {
 	return nil
 }
 
-func (cfg *Config) L1Signer() types.Signer {
-	return types.NewLondonSigner(cfg.L1ChainID)
+func (c *Config) L1Signer() types.Signer {
+	return types.NewCancunSigner(c.L1ChainID)
 }
 
 func (cfg *Config) ComputeTimestamp(blockNum uint64) uint64 {

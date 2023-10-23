@@ -29,8 +29,9 @@ type NextFrameProvider interface {
 
 // ChannelBank buffers channel frames, and emits full channel data
 type ChannelBank struct {
-	log log.Logger
-	cfg *rollup.Config
+	log     log.Logger
+	cfg     *rollup.Config
+	metrics Metrics
 
 	channels     map[ChannelID]*Channel // channels by ID
 	channelQueue []ChannelID            // channels in FIFO order
@@ -39,13 +40,14 @@ type ChannelBank struct {
 	fetcher L1Fetcher
 }
 
-var _ ResetableStage = (*ChannelBank)(nil)
+var _ ResettableStage = (*ChannelBank)(nil)
 
 // NewChannelBank creates a ChannelBank, which should be Reset(origin) before use.
-func NewChannelBank(log log.Logger, cfg *rollup.Config, prev NextFrameProvider, fetcher L1Fetcher) *ChannelBank {
+func NewChannelBank(log log.Logger, cfg *rollup.Config, prev NextFrameProvider, fetcher L1Fetcher, m Metrics) *ChannelBank {
 	return &ChannelBank{
 		log:          log,
 		cfg:          cfg,
+		metrics:      m,
 		channels:     make(map[ChannelID]*Channel),
 		channelQueue: make([]ChannelID, 0, 10),
 		prev:         prev,

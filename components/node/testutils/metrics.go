@@ -1,6 +1,8 @@
 package testutils
 
-import "github.com/kroma-network/kroma/components/node/eth"
+import (
+	"github.com/kroma-network/kroma/components/node/eth"
+)
 
 // TestDerivationMetrics implements the metrics used in the derivation pipeline as no-op operations.
 // Optionally a test may hook into the metrics
@@ -40,6 +42,15 @@ func (t *TestDerivationMetrics) RecordChannelInputBytes(inputCompressedBytes int
 	if t.FnRecordChannelInputBytes != nil {
 		t.FnRecordChannelInputBytes(inputCompressedBytes)
 	}
+}
+
+func (t *TestDerivationMetrics) RecordHeadChannelOpened() {
+}
+
+func (t *TestDerivationMetrics) RecordChannelTimedOut() {
+}
+
+func (t *TestDerivationMetrics) RecordFrame() {
 }
 
 type TestRPCMetrics struct{}

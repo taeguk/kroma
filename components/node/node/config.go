@@ -6,9 +6,13 @@ import (
 	"math"
 	"time"
 
+	"github.com/ethereum/go-ethereum/log"
+
+	"github.com/kroma-network/kroma/components/node/flags"
 	"github.com/kroma-network/kroma/components/node/p2p"
 	"github.com/kroma-network/kroma/components/node/rollup"
 	"github.com/kroma-network/kroma/components/node/rollup/driver"
+	"github.com/kroma-network/kroma/components/node/rollup/sync"
 	kpprof "github.com/kroma-network/kroma/utils/service/pprof"
 )
 
@@ -16,6 +20,8 @@ type Config struct {
 	L1     L1EndpointSetup
 	L2     L2EndpointSetup
 	L2Sync L2SyncEndpointSetup
+
+	Beacon L1BeaconEndpointSetup
 
 	Driver driver.Config
 
@@ -36,9 +42,23 @@ type Config struct {
 	// Used to poll the L1 for new finalized or safe blocks
 	L1EpochPollInterval time.Duration
 
+	ConfigPersistence ConfigPersistence
+
+	// RuntimeConfigReloadInterval defines the interval between runtime config reloads.
+	// Disabled if <= 0.
+	// Runtime config changes should be picked up from log-events,
+	// but if log-events are not coming in (e.g. not syncing blocks) then the reload ensures the config stays accurate.
+	RuntimeConfigReloadInterval time.Duration
+
 	// Optional
 	Tracer    Tracer
 	Heartbeat HeartbeatConfig
+
+	Sync sync.Config
+
+	// To halt when detecting the node does not support a signaled protocol version
+	// change of the given severity (major/minor/patch). Disabled if empty.
+	RollupHalt string
 }
 
 type RPCConfig struct {
@@ -75,6 +95,24 @@ type HeartbeatConfig struct {
 	URL     string
 }
 
+func (cfg *Config) LoadPersisted(log log.Logger) error {
+	if !cfg.Driver.ProposerEnabled {
+		return nil
+	}
+	if state, err := cfg.ConfigPersistence.SequencerState(); err != nil {
+		return err
+	} else if state != StateUnset {
+		stopped := state == StateStopped
+		if stopped != cfg.Driver.ProposerStopped {
+			log.Warn(fmt.Sprintf("Overriding %v with persisted state", flags.ProposerStoppedFlag.Name), "stopped", stopped)
+		}
+		cfg.Driver.ProposerStopped = stopped
+	} else {
+		log.Info("No persisted sequencer state loaded")
+	}
+	return nil
+}
+
 // Check verifies that the given configuration makes sense
 func (cfg *Config) Check() error {
 	if err := cfg.L2.Check(); err != nil {
@@ -82,6 +120,11 @@ func (cfg *Config) Check() error {
 	}
 	if err := cfg.L2Sync.Check(); err != nil {
 		return fmt.Errorf("sync config error: %w", err)
+	}
+	if cfg.Beacon != nil {
+		if err := cfg.Beacon.Check(); err != nil {
+			return fmt.Errorf("beacon endpoint config error: %w", err)
+		}
 	}
 	if err := cfg.Rollup.Check(); err != nil {
 		return fmt.Errorf("rollup config error: %w", err)

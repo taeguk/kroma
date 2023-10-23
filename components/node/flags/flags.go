@@ -45,6 +45,7 @@ var (
 		Usage:   fmt.Sprintf("Predefined network selection. Available networks: %s", strings.Join(chaincfg.AvailableNetworks(), ", ")),
 		EnvVars: prefixEnvVar("NETWORK"),
 	}
+	/* Optional Flags */
 	RPCListenAddr = &cli.StringFlag{
 		Name:    "rpc.addr",
 		Usage:   "RPC listening address",
@@ -60,8 +61,11 @@ var (
 		Usage:   "Enable the admin API (experimental)",
 		EnvVars: prefixEnvVar("RPC_ENABLE_ADMIN"),
 	}
-
-	/* Optional Flags */
+	RPCAdminPersistence = &cli.StringFlag{
+		Name:    "rpc.admin-state",
+		Usage:   "File path used to persist state changes made via the admin API so they persist across restarts. Disabled if not set.",
+		EnvVars: prefixEnvVar("RPC_ADMIN_STATE"),
+	}
 	L1TrustRPC = &cli.BoolFlag{
 		Name:    "l1.trustrpc",
 		Usage:   "Trust the L1 RPC, sync faster at risk of malicious/buggy RPC providing bad or inconsistent L1 data",
@@ -94,6 +98,12 @@ var (
 		Usage:   "Polling interval for latest-block subscription when using an HTTP RPC provider. Ignored for other types of RPC endpoints.",
 		EnvVars: prefixEnvVar("L1_HTTP_POLL_INTERVAL"),
 		Value:   time.Second * 12,
+	}
+	BeaconAddr = &cli.StringFlag{
+		Name:    "beacon",
+		Usage:   "Address of Beacon-node HTTP endpoint to use (beacon namespace required)",
+		Value:   "http://127.0.0.1:4000",
+		EnvVars: prefixEnvVar("L1_BEACON_API"),
 	}
 	L2EngineJWTSecret = &cli.StringFlag{
 		Name:        "l2.jwt-secret",
@@ -140,6 +150,13 @@ var (
 		EnvVars:  prefixEnvVar("L1_EPOCH_POLL_INTERVAL"),
 		Required: false,
 		Value:    time.Second * 12 * 32,
+	}
+	RuntimeConfigReloadIntervalFlag = &cli.DurationFlag{
+		Name:     "l1.runtime-config-reload-interval",
+		Usage:    "Poll interval for reloading the runtime config, useful when config events are not being picked up. Disabled if 0 or negative.",
+		EnvVars:  prefixEnvVar("L1_RUNTIME_CONFIG_RELOAD_INTERVAL"),
+		Required: false,
+		Value:    time.Minute * 10,
 	}
 	MetricsEnabledFlag = &cli.BoolFlag{
 		Name:    "metrics.enabled",
@@ -209,6 +226,31 @@ var (
 		EnvVars:  prefixEnvVar("L2_BACKUP_UNSAFE_SYNC_RPC_TRUST_RPC"),
 		Required: false,
 	}
+	L2EngineSyncEnabled = &cli.BoolFlag{
+		Name:     "l2.engine-sync",
+		Usage:    "Enables or disables execution engine P2P sync",
+		EnvVars:  prefixEnvVar("L2_ENGINE_SYNC_ENABLED"),
+		Required: false,
+		Value:    false,
+	}
+	SkipSyncStartCheck = &cli.BoolFlag{
+		Name: "l2.skip-sync-start-check",
+		Usage: "Skip sanity check of consistency of L1 origins of the unsafe L2 blocks when determining the sync-starting point. " +
+			"This defers the L1-origin verification, and is recommended to use in when utilizing l2.engine-sync",
+		EnvVars:  prefixEnvVar("L2_SKIP_SYNC_START_CHECK"),
+		Required: false,
+		Value:    false,
+	}
+	RollupHalt = &cli.StringFlag{
+		Name:    "rollup.halt",
+		Usage:   "Opt-in option to halt on incompatible protocol version requirements of the given level (major/minor/patch/none), as signaled onchain in L1",
+		EnvVars: prefixEnvVar("ROLLUP_HALT"),
+	}
+	RollupLoadProtocolVersions = &cli.BoolFlag{
+		Name:    "rollup.load-protocol-versions",
+		Usage:   "Load protocol versions from the superchain L1 ProtocolVersions contract (if available), and report in logs and metrics",
+		EnvVars: prefixEnvVar("ROLLUP_LOAD_PROTOCOL_VERSIONS"),
+	}
 )
 
 var requiredFlags = []cli.Flag{
@@ -219,6 +261,7 @@ var requiredFlags = []cli.Flag{
 }
 
 var optionalFlags = []cli.Flag{
+	BeaconAddr,
 	RollupConfig,
 	Network,
 	L1TrustRPC,

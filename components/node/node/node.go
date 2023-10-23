@@ -39,6 +39,8 @@ type KromaNode struct {
 	tracer    Tracer                // tracer to get events for testing/debugging
 	runCfg    *RuntimeConfig        // runtime configurables
 
+	beacon *sources.L1BeaconClient
+
 	// some resources cannot be stopped directly, like the p2p gossipsub router (not our design),
 	// and depend on this ctx to be closed.
 	resourcesCtx   context.Context
@@ -78,6 +80,9 @@ func (n *KromaNode) init(ctx context.Context, cfg *Config, snapshotLog log.Logge
 		return err
 	}
 	if err := n.initL1(ctx, cfg); err != nil {
+		return err
+	}
+	if err := n.initL1BeaconAPI(ctx, cfg); err != nil {
 		return err
 	}
 	if err := n.initRuntimeConfig(ctx, cfg); err != nil {
@@ -181,6 +186,22 @@ func (n *KromaNode) initRuntimeConfig(ctx context.Context, cfg *Config) error {
 	return errors.New("failed to load runtime configuration repeatedly")
 }
 
+func (n *KromaNode) initL1BeaconAPI(ctx context.Context, cfg *Config) error {
+	if cfg.Beacon == nil {
+		return nil
+	}
+	httpClient, err := cfg.Beacon.Setup(ctx, n.log)
+	if err != nil {
+		return fmt.Errorf("failed to setup L2 execution-engine RPC client: %w", err)
+	}
+
+	// TODO: wrap http client with metrics
+	cl := sources.NewL1BeaconClient(httpClient)
+	n.beacon = cl
+
+	return nil
+}
+
 func (n *KromaNode) initL2(ctx context.Context, cfg *Config, snapshotLog log.Logger) error {
 	rpcClient, rpcCfg, err := cfg.L2.Setup(ctx, n.log, &cfg.Rollup)
 	if err != nil {
@@ -198,7 +219,7 @@ func (n *KromaNode) initL2(ctx context.Context, cfg *Config, snapshotLog log.Log
 		return err
 	}
 
-	n.l2Driver = driver.NewDriver(&cfg.Driver, &cfg.Rollup, n.l2Source, n.l1Source, n, n, n.log, snapshotLog, n.metrics)
+	n.l2Driver = driver.NewDriver(&cfg.Driver, &cfg.Rollup, n.l2Source, n.l1Source, n.beacon, n, n, n.log, snapshotLog, n.metrics, cfg.ConfigPersistence, &cfg.Sync)
 
 	return nil
 }

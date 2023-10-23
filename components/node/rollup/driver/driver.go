@@ -10,6 +10,7 @@ import (
 	"github.com/kroma-network/kroma/components/node/eth"
 	"github.com/kroma-network/kroma/components/node/rollup"
 	"github.com/kroma-network/kroma/components/node/rollup/derive"
+	"github.com/kroma-network/kroma/components/node/rollup/sync"
 )
 
 type Metrics interface {
@@ -22,6 +23,9 @@ type Metrics interface {
 	RecordL1Ref(name string, ref eth.L1BlockRef)
 	RecordL2Ref(name string, ref eth.L2BlockRef)
 	RecordChannelInputBytes(inputCompressedBytes int)
+	RecordHeadChannelOpened()
+	RecordChannelTimedOut()
+	RecordFrame()
 
 	RecordUnsafePayloadsBuffer(length uint64, memSize uint64, next eth.BlockID)
 
@@ -30,6 +34,7 @@ type Metrics interface {
 	RecordL1ReorgDepth(d uint64)
 
 	EngineMetrics
+	L1FetcherMetrics
 	ProposerMetrics
 }
 
@@ -57,6 +62,7 @@ type DerivationPipeline interface {
 	UnsafeL2Head() eth.L2BlockRef
 	Origin() eth.L1BlockRef
 	EngineReady() bool
+	EngineSyncTarget() eth.L2BlockRef
 }
 
 type L1StateIface interface {
@@ -75,6 +81,7 @@ type ProposerIface interface {
 	PlanNextProposerAction() time.Duration
 	RunNextProposerAction(ctx context.Context) (*eth.ExecutionPayload, error)
 	BuildingOnto() eth.L2BlockRef
+	CancelBuildingBlock(ctx context.Context)
 }
 
 type Network interface {
@@ -101,13 +108,19 @@ type AltSync interface {
 	RequestL2Range(ctx context.Context, start, end eth.L2BlockRef) error
 }
 
+type SequencerStateListener interface {
+	SequencerStarted() error
+	SequencerStopped() error
+}
+
 // NewDriver composes an events handler that tracks L1 state, triggers L2 derivation, and optionally proposes new L2 blocks.
-func NewDriver(driverCfg *Config, cfg *rollup.Config, l2 L2Chain, l1 L1Chain, altSync AltSync, network Network, log log.Logger, snapshotLog log.Logger, metrics Metrics) *Driver {
+func NewDriver(driverCfg *Config, cfg *rollup.Config, l2 L2Chain, l1 L1Chain, l1Blobs derive.L1BlobsFetcher, altSync AltSync, network Network, log log.Logger, snapshotLog log.Logger, metrics Metrics, sequencerStateListener SequencerStateListener, syncCfg *sync.Config) *Driver {
+	l1 = NewMeteredL1Fetcher(l1, metrics)
 	l1State := NewL1State(log, metrics)
 	proposerConfDepth := NewConfDepth(driverCfg.ProposerConfDepth, l1State.L1Head, l1)
 	findL1Origin := NewL1OriginSelector(log, cfg, proposerConfDepth)
 	syncConfDepth := NewConfDepth(driverCfg.SyncerConfDepth, l1State.L1Head, l1)
-	derivationPipeline := derive.NewDerivationPipeline(log, cfg, syncConfDepth, l2, metrics)
+	derivationPipeline := derive.NewDerivationPipeline(log, cfg, syncConfDepth, l1Blobs, l2, metrics, syncCfg)
 	attrBuilder := derive.NewFetchingAttributesBuilder(cfg, l1, l2)
 	engine := derivationPipeline
 	meteredEngine := NewMeteredEngine(cfg, engine, metrics, log)
@@ -120,6 +133,8 @@ func NewDriver(driverCfg *Config, cfg *rollup.Config, l2 L2Chain, l1 L1Chain, al
 		forceReset:       make(chan chan struct{}, 10),
 		startProposer:    make(chan hashAndErrorChannel, 10),
 		stopProposer:     make(chan chan hashAndError, 10),
+		sequencerActive:  make(chan chan bool, 10),
+		sequencerNotifs:  sequencerStateListener,
 		config:           cfg,
 		driverConfig:     driverCfg,
 		done:             make(chan struct{}),

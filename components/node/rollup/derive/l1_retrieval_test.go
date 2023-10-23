@@ -6,12 +6,13 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
 
 	"github.com/kroma-network/kroma/components/node/eth"
 	"github.com/kroma-network/kroma/components/node/testlog"
@@ -34,13 +35,13 @@ type MockDataSource struct {
 	mock.Mock
 }
 
-func (m *MockDataSource) OpenData(ctx context.Context, id eth.BlockID, batcherAddr common.Address) DataIter {
-	out := m.Mock.MethodCalled("OpenData", id, batcherAddr)
+func (m *MockDataSource) OpenData(ctx context.Context, ref eth.L1BlockRef, batcherAddr common.Address) DataIter {
+	out := m.Mock.MethodCalled("OpenData", ref, batcherAddr)
 	return out[0].(DataIter)
 }
 
-func (m *MockDataSource) ExpectOpenData(id eth.BlockID, iter DataIter, batcherAddr common.Address) {
-	m.Mock.On("OpenData", id, batcherAddr).Return(iter)
+func (m *MockDataSource) ExpectOpenData(ref eth.L1BlockRef, batcherAddr common.Address, iter DataIter) {
+	m.Mock.On("OpenData", ref, batcherAddr).Return(iter)
 }
 
 var _ DataAvailabilitySource = (*MockDataSource)(nil)
@@ -78,8 +79,7 @@ func (m *MockL1Traversal) ExpectNextL1Block(block eth.L1BlockRef, err error) {
 
 var _ NextBlockProvider = (*MockL1Traversal)(nil)
 
-// TestL1RetrievalReset tests the reset. The reset just opens up a new
-// data for the specified block.
+// TestL1RetrievalReset tests the reset. The reset prepares for retrieval, but does not retrieve data yet.
 func TestL1RetrievalReset(t *testing.T) {
 	rng := rand.New(rand.NewSource(1234))
 	dataSrc := &MockDataSource{}
@@ -88,7 +88,7 @@ func TestL1RetrievalReset(t *testing.T) {
 		BatcherAddr: common.Address{42},
 	}
 
-	dataSrc.ExpectOpenData(a.ID(), &fakeDataIter{}, l1Cfg.BatcherAddr)
+	dataSrc.ExpectOpenData(a, l1Cfg.BatcherAddr, &fakeDataIter{})
 	defer dataSrc.AssertExpectations(t)
 
 	l1r := NewL1Retrieval(testlog.Logger(t, log.LvlError), dataSrc, nil)
@@ -146,7 +146,7 @@ func TestL1RetrievalNextData(t *testing.T) {
 			l1t := &MockL1Traversal{}
 			l1t.ExpectNextL1Block(test.prevBlock, test.prevErr)
 			dataSrc := &MockDataSource{}
-			dataSrc.ExpectOpenData(test.prevBlock.ID(), &fakeDataIter{data: test.datas, errs: test.datasErrs}, test.sysCfg.BatcherAddr)
+			dataSrc.ExpectOpenData(test.prevBlock, test.sysCfg.BatcherAddr, &fakeDataIter{data: test.datas, errs: test.datasErrs})
 
 			ret := NewL1Retrieval(testlog.Logger(t, log.LvlCrit), dataSrc, l1t)
 

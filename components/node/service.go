@@ -1,4 +1,4 @@
-package knode
+package opnode
 
 import (
 	"crypto/rand"
@@ -8,10 +8,11 @@ import (
 	"os"
 	"strings"
 
+	"github.com/urfave/cli/v2"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/urfave/cli/v2"
 
 	"github.com/kroma-network/kroma/components/node/chaincfg"
 	"github.com/kroma-network/kroma/components/node/flags"
@@ -19,6 +20,7 @@ import (
 	p2pcli "github.com/kroma-network/kroma/components/node/p2p/cli"
 	"github.com/kroma-network/kroma/components/node/rollup"
 	"github.com/kroma-network/kroma/components/node/rollup/driver"
+	"github.com/kroma-network/kroma/components/node/rollup/sync"
 	"github.com/kroma-network/kroma/components/node/sources"
 	kpprof "github.com/kroma-network/kroma/utils/service/pprof"
 )
@@ -29,10 +31,17 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 		return nil, err
 	}
 
-	rollupConfig, err := NewRollupConfig(ctx)
+	rollupConfig, err := NewRollupConfig(log, ctx)
 	if err != nil {
 		return nil, err
 	}
+
+	if !ctx.Bool(flags.RollupLoadProtocolVersions.Name) {
+		log.Info("Not opted in to ProtocolVersions signal loading, disabling ProtocolVersions contract now.")
+		rollupConfig.ProtocolVersionsAddress = common.Address{}
+	}
+
+	configPersistence := NewConfigPersistence(ctx)
 
 	driverConfig := NewDriverConfig(ctx)
 
@@ -55,10 +64,22 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 
 	l2SyncEndpoint := NewL2SyncEndpointConfig(ctx)
 
+	syncConfig := NewSyncConfig(ctx)
+
+	haltOption := ctx.String(flags.RollupHalt.Name)
+	if haltOption == "none" {
+		haltOption = ""
+	}
+	beaconEndpoint, err := NewL1BeaconEndpointConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load beacon endpoints info: %w", err)
+	}
+
 	cfg := &node.Config{
 		L1:     l1Endpoint,
 		L2:     l2Endpoint,
 		L2Sync: l2SyncEndpoint,
+		Beacon: beaconEndpoint,
 		Rollup: *rollupConfig,
 		Driver: *driverConfig,
 		RPC: node.RPCConfig{
@@ -76,15 +97,24 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 			ListenAddr: ctx.String(flags.PprofAddrFlag.Name),
 			ListenPort: ctx.Int(flags.PprofPortFlag.Name),
 		},
-		P2P:                 p2pConfig,
-		P2PSigner:           p2pSignerSetup,
-		L1EpochPollInterval: ctx.Duration(flags.L1EpochPollIntervalFlag.Name),
+		P2P:                         p2pConfig,
+		P2PSigner:                   p2pSignerSetup,
+		L1EpochPollInterval:         ctx.Duration(flags.L1EpochPollIntervalFlag.Name),
+		RuntimeConfigReloadInterval: ctx.Duration(flags.RuntimeConfigReloadIntervalFlag.Name),
 		Heartbeat: node.HeartbeatConfig{
 			Enabled: ctx.Bool(flags.HeartbeatEnabledFlag.Name),
 			Moniker: ctx.String(flags.HeartbeatMonikerFlag.Name),
 			URL:     ctx.String(flags.HeartbeatURLFlag.Name),
 		},
+		ConfigPersistence: configPersistence,
+		Sync:              *syncConfig,
+		RollupHalt:        haltOption,
 	}
+
+	if err := cfg.LoadPersisted(log); err != nil {
+		return nil, fmt.Errorf("failed to load driver config: %w", err)
+	}
+
 	if err := cfg.Check(); err != nil {
 		return nil, err
 	}
@@ -121,7 +151,7 @@ func NewL2EndpointConfig(ctx *cli.Context, log log.Logger) (*node.L2EndpointConf
 		if _, err := io.ReadFull(rand.Reader, secret[:]); err != nil {
 			return nil, fmt.Errorf("failed to generate jwt secret: %w", err)
 		}
-		if err := os.WriteFile(fileName, []byte(hexutil.Encode(secret[:])), 0o600); err != nil {
+		if err := os.WriteFile(fileName, []byte(hexutil.Encode(secret[:])), 0600); err != nil {
 			return nil, err
 		}
 	}
@@ -129,6 +159,12 @@ func NewL2EndpointConfig(ctx *cli.Context, log log.Logger) (*node.L2EndpointConf
 	return &node.L2EndpointConfig{
 		L2EngineAddr:      l2Addr,
 		L2EngineJWTSecret: secret,
+	}, nil
+}
+
+func NewL1BeaconEndpointConfig(ctx *cli.Context) (*node.L1BeaconEndpointConfig, error) {
+	return &node.L1BeaconEndpointConfig{
+		BeaconAddr: ctx.String(flags.BeaconAddr.Name),
 	}, nil
 }
 
@@ -141,6 +177,14 @@ func NewL2SyncEndpointConfig(ctx *cli.Context) *node.L2SyncEndpointConfig {
 	}
 }
 
+func NewConfigPersistence(ctx *cli.Context) node.ConfigPersistence {
+	stateFile := ctx.String(flags.RPCAdminPersistence.Name)
+	if stateFile == "" {
+		return node.DisabledConfigPersistence{}
+	}
+	return node.NewConfigPersistence(stateFile)
+}
+
 func NewDriverConfig(ctx *cli.Context) *driver.Config {
 	return &driver.Config{
 		SyncerConfDepth:    ctx.Uint64(flags.SyncerL1Confs.Name),
@@ -151,18 +195,28 @@ func NewDriverConfig(ctx *cli.Context) *driver.Config {
 	}
 }
 
-func NewRollupConfig(ctx *cli.Context) (*rollup.Config, error) {
+func NewRollupConfig(log log.Logger, ctx *cli.Context) (*rollup.Config, error) {
 	network := ctx.String(flags.Network.Name)
+	rollupConfigPath := ctx.String(flags.RollupConfig.Name)
 	if network != "" {
+		if rollupConfigPath != "" {
+			log.Error(`Cannot configure network and rollup-config at the same time.
+Startup will proceed to use the network-parameter and ignore the rollup config.
+Conflicting configuration is deprecated, and will stop the op-node from starting in the future.
+`, "network", network, "rollup_config", rollupConfigPath)
+		}
+		// check that the network is available
+		if !chaincfg.IsAvailableNetwork(network, false) {
+			return nil, fmt.Errorf("unavailable network: %q", network)
+		}
 		config, err := chaincfg.GetRollupConfig(network)
 		if err != nil {
 			return nil, err
 		}
 
-		return &config, nil
+		return config, nil
 	}
 
-	rollupConfigPath := ctx.String(flags.RollupConfig.Name)
 	file, err := os.Open(rollupConfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read rollup config: %w", err)
@@ -190,4 +244,11 @@ func NewSnapshotLogger(ctx *cli.Context) (log.Logger, error) {
 	logger := log.New()
 	logger.SetHandler(handler)
 	return logger, nil
+}
+
+func NewSyncConfig(ctx *cli.Context) *sync.Config {
+	return &sync.Config{
+		EngineSync:         ctx.Bool(flags.L2EngineSyncEnabled.Name),
+		SkipSyncStartCheck: ctx.Bool(flags.SkipSyncStartCheck.Name),
+	}
 }

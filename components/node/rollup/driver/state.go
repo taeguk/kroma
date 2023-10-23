@@ -47,6 +47,14 @@ type Driver struct {
 	// It tells the caller that the proposer stopped by returning the latest proposed L2 block hash.
 	stopProposer chan chan hashAndError
 
+	// Upon receiving a channel in this channel, the current sequencer status is queried.
+	// It tells the caller the status by outputting a boolean to the provided channel:
+	// true when the sequencer is active, false when it is not.
+	sequencerActive chan chan bool
+
+	// sequencerNotifs is notified when the sequencer is started or stopped
+	sequencerNotifs SequencerStateListener
+
 	// Rollup config: rollup chain configuration
 	config *rollup.Config
 

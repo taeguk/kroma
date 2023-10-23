@@ -3,21 +3,21 @@ package metrics
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
 	"strconv"
 	"time"
 
-	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/rpc"
 	pb "github.com/libp2p/go-libp2p-pubsub/pb"
 	libp2pmetrics "github.com/libp2p/go-libp2p/core/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/rpc"
 
 	"github.com/kroma-network/kroma/components/node/eth"
 	khttp "github.com/kroma-network/kroma/components/node/http"
@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	Namespace = "kroma_node"
+	Namespace = "op_node"
 
 	RPCServerSubsystem = "rpc_server"
 	RPCClientSubsystem = "rpc_client"
@@ -46,7 +46,7 @@ type Metricer interface {
 	RecordPublishingError()
 	RecordDerivationError()
 	RecordReceivedUnsafePayload(payload *eth.ExecutionPayload)
-	recordRef(layer string, name string, num uint64, timestamp uint64, h common.Hash)
+	RecordRef(layer string, name string, num uint64, timestamp uint64, h common.Hash)
 	RecordL1Ref(name string, ref eth.L1BlockRef)
 	RecordL2Ref(name string, ref eth.L2BlockRef)
 	RecordUnsafePayloadsBuffer(length uint64, memSize uint64, next eth.BlockID)
@@ -64,6 +64,9 @@ type Metricer interface {
 	RecordProposerSealingTime(duration time.Duration)
 	Document() []metrics.DocumentedMetric
 	RecordChannelInputBytes(num int)
+	RecordHeadChannelOpened()
+	RecordChannelTimedOut()
+	RecordFrame()
 	// P2P Metrics
 	SetPeerScores(allScores []store.PeerScores)
 	ClientPayloadByNumberEvent(num uint64, resultCode byte, duration time.Duration)
@@ -91,11 +94,11 @@ type Metrics struct {
 
 	DerivationIdle prometheus.Gauge
 
-	PipelineResets   *EventMetrics
-	UnsafePayloads   *EventMetrics
-	DerivationErrors *EventMetrics
-	SequencingErrors *EventMetrics
-	PublishingErrors *EventMetrics
+	PipelineResets   *metrics.Event
+	UnsafePayloads   *metrics.Event
+	DerivationErrors *metrics.Event
+	SequencingErrors *metrics.Event
+	PublishingErrors *metrics.Event
 
 	P2PReqDurationSeconds *prometheus.HistogramVec
 	P2PReqTotal           *prometheus.CounterVec
@@ -103,8 +106,8 @@ type Metrics struct {
 
 	PayloadsQuarantineTotal prometheus.Gauge
 
-	ProposerInconsistentL1Origin *EventMetrics
-	ProposerResets               *EventMetrics
+	ProposerInconsistentL1Origin *metrics.Event
+	ProposerResets               *metrics.Event
 
 	L1RequestDurationSeconds *prometheus.HistogramVec
 
@@ -117,18 +120,16 @@ type Metrics struct {
 	UnsafePayloadsBufferLen     prometheus.Gauge
 	UnsafePayloadsBufferMemSize prometheus.Gauge
 
-	RefsNumber  *prometheus.GaugeVec
-	RefsTime    *prometheus.GaugeVec
-	RefsHash    *prometheus.GaugeVec
-	RefsSeqNr   *prometheus.GaugeVec
-	RefsLatency *prometheus.GaugeVec
-	// hash of the last seen block per name, so we don't reduce/increase latency on updates of the same data,
-	// and only count the first occurrence
-	LatencySeen map[string]common.Hash
+	metrics.RefMetrics
 
 	L1ReorgDepth prometheus.Histogram
 
 	TransactionsSequencedTotal prometheus.Counter
+
+	// Channel Bank Metrics
+	headChannelOpenedEvent *metrics.Event
+	channelTimedOutEvent   *metrics.Event
+	frameAddedEvent        *metrics.Event
 
 	// P2P Metrics
 	PeerCount         prometheus.Gauge
@@ -142,6 +143,12 @@ type Metrics struct {
 	PeerScores        *prometheus.HistogramVec
 
 	ChannelInputBytes prometheus.Counter
+
+	// Protocol version reporting
+	// Delta = params.ProtocolVersionComparison
+	ProtocolVersionDelta *prometheus.GaugeVec
+	// ProtocolVersions is pseudo-metric to report the exact protocol version info
+	ProtocolVersions *prometheus.GaugeVec
 
 	registry *prometheus.Registry
 	factory  metrics.Factory
@@ -160,6 +167,7 @@ func NewMetrics(procName string) *Metrics {
 	registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	registry.MustRegister(collectors.NewGoCollector())
 	factory := metrics.With(registry)
+
 	return &Metrics{
 		Info: factory.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: ns,
@@ -227,14 +235,14 @@ func NewMetrics(procName string) *Metrics {
 			Help:      "1 if the derivation pipeline is idle",
 		}),
 
-		PipelineResets:   NewEventMetrics(factory, ns, "pipeline_resets", "derivation pipeline resets"),
-		UnsafePayloads:   NewEventMetrics(factory, ns, "unsafe_payloads", "unsafe payloads"),
-		DerivationErrors: NewEventMetrics(factory, ns, "derivation_errors", "derivation errors"),
-		SequencingErrors: NewEventMetrics(factory, ns, "sequencing_errors", "sequencing errors"),
-		PublishingErrors: NewEventMetrics(factory, ns, "publishing_errors", "p2p publishing errors"),
+		PipelineResets:   metrics.NewEvent(factory, ns, "", "pipeline_resets", "derivation pipeline resets"),
+		UnsafePayloads:   metrics.NewEvent(factory, ns, "", "unsafe_payloads", "unsafe payloads"),
+		DerivationErrors: metrics.NewEvent(factory, ns, "", "derivation_errors", "derivation errors"),
+		SequencingErrors: metrics.NewEvent(factory, ns, "", "sequencing_errors", "sequencing errors"),
+		PublishingErrors: metrics.NewEvent(factory, ns, "", "publishing_errors", "p2p publishing errors"),
 
-		ProposerInconsistentL1Origin: NewEventMetrics(factory, ns, "proposer_inconsistent_l1_origin", "events when the proposer selects an inconsistent L1 origin"),
-		ProposerResets:               NewEventMetrics(factory, ns, "proposer_resets", "proposer resets"),
+		ProposerInconsistentL1Origin: metrics.NewEvent(factory, ns, "", "proposer_inconsistent_l1_origin", "events when the proposer selects an inconsistent L1 origin"),
+		ProposerResets:               metrics.NewEvent(factory, ns, "", "proposer_resets", "proposer resets"),
 
 		UnsafePayloadsBufferLen: factory.NewGauge(prometheus.GaugeOpts{
 			Namespace: ns,
@@ -247,46 +255,7 @@ func NewMetrics(procName string) *Metrics {
 			Help:      "Total estimated memory size of buffered L2 unsafe payloads",
 		}),
 
-		RefsNumber: factory.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: ns,
-			Name:      "refs_number",
-			Help:      "Gauge representing the different L1/L2 reference block numbers",
-		}, []string{
-			"layer",
-			"type",
-		}),
-		RefsTime: factory.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: ns,
-			Name:      "refs_time",
-			Help:      "Gauge representing the different L1/L2 reference block timestamps",
-		}, []string{
-			"layer",
-			"type",
-		}),
-		RefsHash: factory.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: ns,
-			Name:      "refs_hash",
-			Help:      "Gauge representing the different L1/L2 reference block hashes truncated to float values",
-		}, []string{
-			"layer",
-			"type",
-		}),
-		RefsSeqNr: factory.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: ns,
-			Name:      "refs_seqnr",
-			Help:      "Gauge representing the different L2 reference sequence numbers",
-		}, []string{
-			"type",
-		}),
-		RefsLatency: factory.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: ns,
-			Name:      "refs_latency",
-			Help:      "Gauge representing the different L1/L2 reference block timestamps minus current time, in seconds",
-		}, []string{
-			"layer",
-			"type",
-		}),
-		LatencySeen: make(map[string]common.Hash),
+		RefMetrics: metrics.MakeRefMetrics(ns, factory),
 
 		L1ReorgDepth: factory.NewHistogram(prometheus.HistogramOpts{
 			Namespace: ns,
@@ -359,6 +328,10 @@ func NewMetrics(procName string) *Metrics {
 			Name:      "accepts",
 			Help:      "Count of incoming dial attempts to accept, with label to filter to allowed attempts",
 		}, []string{"allow"}),
+
+		headChannelOpenedEvent: metrics.NewEvent(factory, ns, "", "head_channel", "New channel at the front of the channel bank"),
+		channelTimedOutEvent:   metrics.NewEvent(factory, ns, "", "channel_timeout", "Channel has timed out"),
+		frameAddedEvent:        metrics.NewEvent(factory, ns, "", "frame_added", "New frame ingested in the channel bank"),
 
 		ChannelInputBytes: factory.NewCounter(prometheus.CounterOpts{
 			Namespace: ns,
@@ -437,6 +410,24 @@ func NewMetrics(procName string) *Metrics {
 			Namespace: ns,
 			Name:      "proposer_sealing_total",
 			Help:      "Number of proposer block sealing jobs",
+		}),
+
+		ProtocolVersionDelta: factory.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: ns,
+			Name:      "protocol_version_delta",
+			Help:      "Difference between local and global protocol version, and execution-engine, per type of version",
+		}, []string{
+			"type",
+		}),
+		ProtocolVersions: factory.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: ns,
+			Name:      "protocol_versions",
+			Help:      "Pseudo-metric tracking recommended and required protocol version info",
+		}, []string{
+			"local",
+			"engine",
+			"recommended",
+			"required",
 		}),
 
 		registry: registry,
@@ -530,53 +521,28 @@ func (m *Metrics) SetDerivationIdle(status bool) {
 }
 
 func (m *Metrics) RecordPipelineReset() {
-	m.PipelineResets.RecordEvent()
+	m.PipelineResets.Record()
 }
 
 func (m *Metrics) RecordSequencingError() {
-	m.SequencingErrors.RecordEvent()
+	m.SequencingErrors.Record()
 }
 
 func (m *Metrics) RecordPublishingError() {
-	m.PublishingErrors.RecordEvent()
+	m.PublishingErrors.Record()
 }
 
 func (m *Metrics) RecordDerivationError() {
-	m.DerivationErrors.RecordEvent()
+	m.DerivationErrors.Record()
 }
 
 func (m *Metrics) RecordReceivedUnsafePayload(payload *eth.ExecutionPayload) {
-	m.UnsafePayloads.RecordEvent()
-	m.recordRef("l2", "received_payload", uint64(payload.BlockNumber), uint64(payload.Timestamp), payload.BlockHash)
-}
-
-func (m *Metrics) recordRef(layer string, name string, num uint64, timestamp uint64, h common.Hash) {
-	m.RefsNumber.WithLabelValues(layer, name).Set(float64(num))
-	if timestamp != 0 {
-		m.RefsTime.WithLabelValues(layer, name).Set(float64(timestamp))
-		// only meter the latency when we first see this hash for the given label name
-		if m.LatencySeen[name] != h {
-			m.LatencySeen[name] = h
-			m.RefsLatency.WithLabelValues(layer, name).Set(float64(timestamp) - (float64(time.Now().UnixNano()) / 1e9))
-		}
-	}
-	// we map the first 8 bytes to a float64, so we can graph changes of the hash to find divergences visually.
-	// We don't do math.Float64frombits, just a regular conversion, to keep the value within a manageable range.
-	m.RefsHash.WithLabelValues(layer, name).Set(float64(binary.LittleEndian.Uint64(h[:])))
-}
-
-func (m *Metrics) RecordL1Ref(name string, ref eth.L1BlockRef) {
-	m.recordRef("l1", name, ref.Number, ref.Time, ref.Hash)
-}
-
-func (m *Metrics) RecordL2Ref(name string, ref eth.L2BlockRef) {
-	m.recordRef("l2", name, ref.Number, ref.Time, ref.Hash)
-	m.recordRef("l1_origin", name, ref.L1Origin.Number, 0, ref.L1Origin.Hash)
-	m.RefsSeqNr.WithLabelValues(name).Set(float64(ref.SequenceNumber))
+	m.UnsafePayloads.Record()
+	m.RecordRef("l2", "received_payload", uint64(payload.BlockNumber), uint64(payload.Timestamp), payload.BlockHash)
 }
 
 func (m *Metrics) RecordUnsafePayloadsBuffer(length uint64, memSize uint64, next eth.BlockID) {
-	m.recordRef("l2", "l2_buffer_unsafe", next.Number, 0, next.Hash)
+	m.RecordRef("l2", "l2_buffer_unsafe", next.Number, 0, next.Hash)
 	m.UnsafePayloadsBufferLen.Set(float64(length))
 	m.UnsafePayloadsBufferMemSize.Set(float64(memSize))
 }
@@ -590,13 +556,13 @@ func (m *Metrics) RecordL1ReorgDepth(d uint64) {
 }
 
 func (m *Metrics) RecordProposerInconsistentL1Origin(from eth.BlockID, to eth.BlockID) {
-	m.ProposerInconsistentL1Origin.RecordEvent()
-	m.recordRef("l1_origin", "inconsistent_from", from.Number, 0, from.Hash)
-	m.recordRef("l1_origin", "inconsistent_to", to.Number, 0, to.Hash)
+	m.ProposerInconsistentL1Origin.Record()
+	m.RecordRef("l1_origin", "inconsistent_from", from.Number, 0, from.Hash)
+	m.RecordRef("l1_origin", "inconsistent_to", to.Number, 0, to.Hash)
 }
 
 func (m *Metrics) RecordProposerReset() {
-	m.ProposerResets.RecordEvent()
+	m.ProposerResets.Record()
 }
 
 func (m *Metrics) RecordGossipEvent(evType int32) {
@@ -699,6 +665,18 @@ func (m *Metrics) RecordChannelInputBytes(inputCompressedBytes int) {
 	m.ChannelInputBytes.Add(float64(inputCompressedBytes))
 }
 
+func (m *Metrics) RecordHeadChannelOpened() {
+	m.headChannelOpenedEvent.Record()
+}
+
+func (m *Metrics) RecordChannelTimedOut() {
+	m.channelTimedOutEvent.Record()
+}
+
+func (m *Metrics) RecordFrame() {
+	m.frameAddedEvent.Record()
+}
+
 func (m *Metrics) RecordPeerUnban() {
 	m.PeerUnbans.Inc()
 }
@@ -762,7 +740,7 @@ func (n *noopMetricer) RecordDerivationError() {
 func (n *noopMetricer) RecordReceivedUnsafePayload(payload *eth.ExecutionPayload) {
 }
 
-func (n *noopMetricer) recordRef(layer string, name string, num uint64, timestamp uint64, h common.Hash) {
+func (n *noopMetricer) RecordRef(layer string, name string, num uint64, timestamp uint64, h common.Hash) {
 }
 
 func (n *noopMetricer) RecordL1Ref(name string, ref eth.L1BlockRef) {
@@ -827,6 +805,15 @@ func (n *noopMetricer) PayloadsQuarantineSize(int) {
 }
 
 func (n *noopMetricer) RecordChannelInputBytes(int) {
+}
+
+func (n *noopMetricer) RecordHeadChannelOpened() {
+}
+
+func (n *noopMetricer) RecordChannelTimedOut() {
+}
+
+func (n *noopMetricer) RecordFrame() {
 }
 
 func (n *noopMetricer) RecordPeerUnban() {
