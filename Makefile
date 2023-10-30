@@ -59,3 +59,21 @@ update-geth:
 	go mod edit -replace $$ETH_GETH=$$KROMA_GETH
 	@go mod tidy
 .PHONY: update-geth
+
+devnet11:
+	@bash ./ops-devnet11/devnet-up.sh
+.PHONY: devnet11
+
+devnet11-clean:
+	rm -rf ./.devnet
+	cd ./ops-devnet11 && docker compose down
+	docker image ls 'ops-devnet11*' --format='{{.Repository}}' | xargs -r docker rmi
+	docker volume ls --filter name=ops-devnet --format='{{.Name}}' | xargs -r docker volume rm
+.PHONY: devnet11-clean
+
+update-geth-4844:
+	@ETH_GETH=$$(go list -m -f '{{.Path}}@{{.Version}}' github.com/ethereum/go-ethereum); \
+	KROMA_GETH=$$(go list -m -f '{{.Path}}@{{.Version}}' github.com/kroma-network/go-ethereum@eip4844); \
+	go mod edit -replace $$ETH_GETH=$$KROMA_GETH
+	@go mod tidy
+.PHONY: update-geth-4844

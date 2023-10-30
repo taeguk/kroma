@@ -1,18 +1,12 @@
 import dotenv from 'dotenv'
-import { ethers } from 'ethers'
-import { HardhatUserConfig } from 'hardhat/config'
-
-// Hardhat plugins
+import {ethers} from 'ethers'
+import {HardhatUserConfig} from 'hardhat/config' // Hardhat plugins
 import '@foundry-rs/hardhat-forge'
 import '@kroma/hardhat-deploy-config'
 import '@nomiclabs/hardhat-ethers'
-import 'hardhat-deploy'
-
-// Hardhat tasks
-import './tasks'
-
-// Deploy configuration
-import { deployConfigSpec } from './src/deploy-config'
+import 'hardhat-deploy' // Hardhat tasks
+import './tasks' // Deploy configuration
+import {deployConfigSpec} from './src/deploy-config' // Load environment variables
 
 // Load environment variables
 dotenv.config()
@@ -77,6 +71,11 @@ const config: HardhatUserConfig = {
       url: process.env.RPC_URL || 'http://localhost:9545',
       accounts: [PRIVATE_KEY_DEPLOYER_DEVNET],
     },
+    devnet11: {
+      live: true,
+      url: 'http://3.35.83.183:8545',
+      accounts: [process.env.PRIVATE_KEY_DEPLOYER_DEVNET11],
+    },
   },
   foundry: {
     buildInfo: true,
@@ -108,13 +107,19 @@ const config: HardhatUserConfig = {
       {
         version: '0.8.15',
         settings: {
-          optimizer: { enabled: true, runs: 10_000 },
+          optimizer: {
+            enabled: true,
+            runs: 10_000,
+          },
         },
       },
       {
         version: '0.5.17', // Required for WETH9
         settings: {
-          optimizer: { enabled: true, runs: 10_000 },
+          optimizer: {
+            enabled: true,
+            runs: 10_000,
+          },
         },
       },
     ],

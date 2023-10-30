@@ -115,22 +115,23 @@ func (cl *L1BeaconClient) BlobsByRefAndIndexedDataHashes(ctx context.Context, re
 	builder := strings.Builder{}
 	builder.WriteString("eth/v1/beacon/blob_sidecars/")
 	builder.WriteString(strconv.FormatUint(slot, 10))
-	for i := range dataHashes {
-		if i == 0 {
-			builder.WriteString("?indices=")
-		} else {
-			builder.WriteString("&indices=")
-		}
-		builder.WriteString(strconv.FormatUint(dataHashes[i].Index, 10))
-	}
+	// for i := range dataHashes {
+	// 	if i == 0 {
+	// 		builder.WriteString("?indices=")
+	// 	} else {
+	// 		builder.WriteString("&indices=")
+	// 	}
+	// 	builder.WriteString(strconv.FormatUint(dataHashes[i].Index, 10))
+	// }
 
 	var resp APIGetBlobSidecarsResponse
 	if err := cl.apiReq(ctx, &resp, builder.String()); err != nil {
 		return nil, fmt.Errorf("failed to fetch blob sidecars of slot %d (for block %s): %w", slot, ref, err)
 	}
-	if len(dataHashes) != len(resp.Data) {
-		return nil, fmt.Errorf("expected %v sidecars but got %v", len(dataHashes), len(resp.Data))
-	}
+
+	// if len(dataHashes) != len(resp.Data) {
+	// 	return nil, fmt.Errorf("expected %v sidecars but got %v", len(dataHashes), len(resp.Data))
+	// }
 
 	out := make([]*eth.Blob, len(dataHashes))
 	for i, ih := range dataHashes {

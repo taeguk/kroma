@@ -35,10 +35,12 @@ const (
 )
 
 // new = old * (100 + priceBump) / 100
-var priceBumpPercent = big.NewInt(100 + priceBump)
-var blobPriceBumpPercent = big.NewInt(100 + blobPriceBump)
-var oneHundred = big.NewInt(100)
-var two = big.NewInt(2)
+var (
+	priceBumpPercent     = big.NewInt(100 + priceBump)
+	blobPriceBumpPercent = big.NewInt(100 + blobPriceBump)
+	oneHundred           = big.NewInt(100)
+	two                  = big.NewInt(2)
+)
 
 // TxManager is an interface that allows callers to reliably publish txs,
 // bumping the gas price if needed, and obtain the receipt of the resulting tx.
