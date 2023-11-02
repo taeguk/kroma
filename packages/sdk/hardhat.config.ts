@@ -4,7 +4,7 @@ import dotenv from 'dotenv'
 import { HardhatUserConfig } from 'hardhat/types'
 import 'hardhat-deploy'
 
-import './src/tasks'
+import 'src/tasks'
 
 // Load environment variables
 dotenv.config()
