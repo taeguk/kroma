@@ -19,6 +19,7 @@ type L1ReceiptsFetcher interface {
 }
 
 type SystemConfigL2Fetcher interface {
+	InfoByHash(ctx context.Context, hash common.Hash) (eth.BlockInfo, error)
 	SystemConfigByL2Hash(ctx context.Context, hash common.Hash) (eth.SystemConfig, error)
 }
 
@@ -104,8 +105,15 @@ func (ba *FetchingAttributesBuilder) PreparePayloadAttributes(ctx context.Contex
 		return nil, NewCriticalError(fmt.Errorf("failed to create l1InfoTx: %w", err))
 	}
 
-	txs := make([]hexutil.Bytes, 0, 1+len(depositTxs))
+	l2ParentInfo, err := ba.l2.InfoByHash(ctx, l2Parent.Hash)
+	if err != nil {
+		return nil, NewCriticalError(fmt.Errorf("failed to fetch L2 parent block %d info: %w", l2Parent.Number, err))
+	}
+	mintTx, err := MintTokenDepositBytes(l2ParentInfo)
+
+	txs := make([]hexutil.Bytes, 0, 2+len(depositTxs))
 	txs = append(txs, l1InfoTx)
+	txs = append(txs, mintTx)
 	txs = append(txs, depositTxs...)
 
 	return &eth.PayloadAttributes{

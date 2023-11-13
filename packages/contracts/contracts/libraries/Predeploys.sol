@@ -54,6 +54,16 @@ library Predeploys {
     address internal constant L2_STANDARD_BRIDGE = 0x4200000000000000000000000000000000000009;
 
     /**
+     * @notice Address of the KromaToken predeploy.
+     */
+    address internal constant KROMA_TOKEN = 0x4200000000000000000000000000000000000010;
+
+    /**
+     * @notice Address of the KromaTokenMinter predeploy.
+     */
+    address internal constant KROMA_TOKEN_MINTER = 0x4200000000000000000000000000000000000011;
+
+    /**
      * @notice Address of the L2ERC721Bridge predeploy.
      */
     address internal constant L2_ERC721_BRIDGE = 0x420000000000000000000000000000000000000A;
