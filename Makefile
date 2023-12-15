@@ -1,7 +1,10 @@
 COMPOSEFLAGS=-d
-
+ITESTS_L2_HOST=http://localhost:9545
 VERSION := $(shell git describe --tags --abbrev=0 --match v* 2> /dev/null || echo 'v0.0.0')
 GIT_COMMIT := $(shell git rev-parse --short=8 HEAD)
+
+# Requires at least Python v3.9; specify a minor version below if needed
+PYTHON?=python3
 
 LD_FLAGS_ARGS +=-X main.Version=$(VERSION)
 LD_FLAGS_ARGS +=-X main.Meta=$(GIT_COMMIT)
@@ -14,9 +17,9 @@ build:
 	GO111MODULE=on go build -v $(LD_FLAGS) -o bin/kroma-validator ./kroma-validator/cmd/main.go
 .PHONY: build
 
-clean:
-	@rm -rf bin/*
-.PHONY: clean
+lint-go:
+	golangci-lint run -E goimports,sqlclosecheck,bodyclose,asciicheck,misspell,errorlint --timeout 5m -e "errors.As" -e "errors.Is" ./...
+.PHONY: lint-go
 
 test:
 	go test ./op-bindings/...
@@ -26,20 +29,35 @@ test:
 	go test ./op-chain-ops/...
 	go test ./kroma-validator/...
 	go test ./op-e2e/... -timeout 30m # requires a minimum of 30min in a CI
-	yarn test
+	pnpm test
 .PHONY: test
 
-lint:
-	@go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.46.2 \
-	&& golangci-lint run
-.PHONY: lint
+golang-docker:
+	# We don't use a buildx builder here, and just load directly into regular docker, for convenience.
+	GIT_COMMIT=$$(git rev-parse HEAD) \
+	GIT_DATE=$$(git show -s --format='%ct') \
+	IMAGE_TAGS=$$GIT_COMMIT,latest \
+	docker buildx bake \
+			--progress plain \
+			--load \
+			-f docker-bake.hcl \
+			op-node op-batcher op-proposer op-challenger
+.PHONY: golang-docker
+
+submodules:
+	# CI will checkout submodules on its own (and fails on these commands)
+	if [ -z "$$GITHUB_ENV" ]; then \
+		git submodule init; \
+		git submodule update --recursive; \
+	fi
+.PHONY: submodules
 
 bindings:
 	make -C ./kroma-bindings
 .PHONY: bindings
 
 contracts-snapshot:
-	@(cd ./packages/contracts && yarn gas-snapshot && yarn storage-snapshot)
+	@(cd ./packages/contracts && pnpm gas-snapshot && pnpm storage-snapshot)
 .PHONY: gas-snapshot
 
 mod-tidy:
@@ -50,6 +68,14 @@ mod-tidy:
 	# See https://proxy.golang.org/ for more info.
 	export GOPRIVATE="github.com/kroma-network" && go mod tidy
 .PHONY: mod-tidy
+
+clean:
+	rm -rf ./bin
+.PHONY: clean
+
+nuke: clean devnet-clean
+	git clean -Xdf
+.PHONY: nuke
 
 pre-devnet:
 	@if ! [ -x "$(command -v geth)" ]; then \
@@ -83,11 +109,21 @@ devnet-clean:
 .PHONY: devnet-clean
 
 devnet-allocs: pre-devnet
-	PYTHONPATH=./kroma-devnet python3 ./kroma-devnet/main.py --monorepo-dir=. --allocs
+	PYTHONPATH=./kroma-devnet $(PYTHON) ./kroma-devnet/main.py --monorepo-dir=. --allocs
 
 devnet-logs:
 	@(cd ./ops-devnet && docker compose logs -f)
 .PHONY: devnet-logs
+
+# Remove the baseline-commit to generate a base reading & show all issues
+semgrep:
+	$(eval DEV_REF := $(shell git rev-parse develop))
+	SEMGREP_REPO_NAME=ethereum-optimism/optimism semgrep ci --baseline-commit=$(DEV_REF)
+.PHONY: semgrep
+
+clean-node-modules:
+	rm -rf node_modules
+	rm -rf packages/**/node_modules
 
 update-geth:
 	@ETH_GETH=$$(go list -m -f '{{.Path}}@{{.Version}}' github.com/ethereum/go-ethereum); \
@@ -98,3 +134,4 @@ update-geth:
 
 install-geth:
 	go install github.com/ethereum/go-ethereum/cmd/geth@v1.12.0
+.PHONY: install-geth

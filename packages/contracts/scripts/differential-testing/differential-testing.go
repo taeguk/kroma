@@ -16,9 +16,9 @@ import (
 	"github.com/ethereum/go-ethereum/trie"
 	zkt "github.com/kroma-network/zktrie/types"
 
-	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/kroma-network/kroma/kroma-bindings/predeploys"
 	"github.com/kroma-network/kroma/kroma-chain-ops/crossdomain"
+	"github.com/kroma-network/kroma/op-service/eth"
 )
 
 func init() {
