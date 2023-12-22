@@ -95,6 +95,9 @@ type Config struct {
 	// L1 address that declares the protocol versions, optional (Beta feature)
 	// ProtocolVersionsAddress common.Address `json:"protocol_versions_address,omitempty"`
 	// [Kroma: END]
+
+	// L1 block timestamp to start reading blobs as batch data-source. Optional.
+	BlobsEnabledL1Timestamp *uint64 `json:"blobs_data,omitempty"`
 }
 
 // ValidateL1Config checks L1 config variables for errors.
@@ -263,7 +266,7 @@ func (cfg *Config) Check() error {
 }
 
 func (c *Config) L1Signer() types.Signer {
-	return types.NewLondonSigner(c.L1ChainID)
+	return types.NewCancunSigner(c.L1ChainID)
 }
 
 // IsRegolith returns true if the Regolith hardfork is active at or past the given timestamp.
