@@ -26,10 +26,10 @@ import (
 	"github.com/kroma-network/kroma/kroma-chain-ops/immutables"
 )
 
-// initialzedValue represents the `Initializable` contract value. It should be kept in
+// InitializedValue represents the `Initializable` contract value. It should be kept in
 // sync with the constant in `Constants.sol`.
 // https://github.com/ethereum-optimism/optimism/blob/develop/packages/contracts-bedrock/src/libraries/Constants.sol
-const initializedValue = 1
+const InitializedValue = 1
 
 var (
 	ErrInvalidDeployConfig     = errors.New("invalid deploy config")
@@ -201,6 +201,11 @@ type DeployConfig struct {
 	// // RequiredProtocolVersion indicates the protocol version that
 	// // nodes are recommended to adopt, to stay in sync with the network.
 	// RecommendedProtocolVersion params.ProtocolVersion `json:"recommendedProtocolVersion"`
+	// [Kroma: END]
+
+	// When Cancun activates. Relative to L1 genesis.
+	L1CancunTimeOffset *uint64 `json:"l1CancunTimeOffset,omitempty"`
+
 	// ValidatorPool proxy address on L1
 	ValidatorPoolProxy common.Address `json:"validatorPoolProxy"`
 	// The initial value of the validator reward scalar
@@ -343,6 +348,19 @@ func (d *DeployConfig) Check() error {
 			return fmt.Errorf("%w: GovernanceToken owner cannot be address(0)", ErrInvalidDeployConfig)
 		}
 	}
+	// L2 block time must always be smaller than L1 block time
+	if d.L1BlockTime < d.L2BlockTime {
+		return fmt.Errorf("L2 block time (%d) is larger than L1 block time (%d)", d.L2BlockTime, d.L1BlockTime)
+	}
+	// [Kroma: START]
+	// if d.RequiredProtocolVersion == (params.ProtocolVersion{}) {
+	// 	log.Warn("RequiredProtocolVersion is empty")
+	// }
+	// if d.RecommendedProtocolVersion == (params.ProtocolVersion{}) {
+	// 	log.Warn("RecommendedProtocolVersion is empty")
+	// }
+	// [Kroma: END]
+
 	// [Kroma: START]
 	if d.ValidatorRewardScalar == 0 {
 		log.Warn("ValidatorRewardScalar is 0")
@@ -399,10 +417,6 @@ func (d *DeployConfig) Check() error {
 		return fmt.Errorf("%w: ZKVerifierM56Py cannot be nil", ErrInvalidDeployConfig)
 	}
 	// [Kroma: END]
-	// L2 block time must always be smaller than L1 block time
-	if d.L1BlockTime < d.L2BlockTime {
-		return fmt.Errorf("L2 block time (%d) is larger than L1 block time (%d)", d.L2BlockTime, d.L1BlockTime)
-	}
 	return nil
 }
 
@@ -443,41 +457,28 @@ func (d *DeployConfig) SetDeployments(deployments *L1Deployments) {
 }
 
 // GetDeployedAddresses will get the deployed addresses of deployed L1 contracts
-// required for the L2 genesis creation. Legacy systems use the `Proxy__` prefix
-// while modern systems use the `Proxy` suffix. First check for the legacy
-// deployments so that this works with upgrading a system.
+// required for the L2 genesis creation.
 func (d *DeployConfig) GetDeployedAddresses(hh *hardhat.Hardhat) error {
-	var err error
-
 	if d.L1StandardBridgeProxy == (common.Address{}) {
-		var l1StandardBridgeProxyDeployment *hardhat.Deployment
-		l1StandardBridgeProxyDeployment, err = hh.GetDeployment("Proxy__OVM_L1StandardBridge")
-		if errors.Is(err, hardhat.ErrCannotFindDeployment) {
-			l1StandardBridgeProxyDeployment, err = hh.GetDeployment("L1StandardBridgeProxy")
-			if err != nil {
-				return err
-			}
+		l1StandardBridgeProxyDeployment, err := hh.GetDeployment("L1StandardBridgeProxy")
+		if err != nil {
+			return fmt.Errorf("cannot find L1StandardBridgeProxy artifact: %w", err)
 		}
 		d.L1StandardBridgeProxy = l1StandardBridgeProxyDeployment.Address
 	}
 
 	if d.L1CrossDomainMessengerProxy == (common.Address{}) {
-		var l1CrossDomainMessengerProxyDeployment *hardhat.Deployment
-		l1CrossDomainMessengerProxyDeployment, err = hh.GetDeployment("Proxy__OVM_L1CrossDomainMessenger")
-		if errors.Is(err, hardhat.ErrCannotFindDeployment) {
-			l1CrossDomainMessengerProxyDeployment, err = hh.GetDeployment("L1CrossDomainMessengerProxy")
-			if err != nil {
-				return err
-			}
+		l1CrossDomainMessengerProxyDeployment, err := hh.GetDeployment("L1CrossDomainMessengerProxy")
+		if err != nil {
+			return fmt.Errorf("cannot find L1CrossDomainMessengerProxy artifact: %w", err)
 		}
 		d.L1CrossDomainMessengerProxy = l1CrossDomainMessengerProxyDeployment.Address
 	}
 
 	if d.L1ERC721BridgeProxy == (common.Address{}) {
-		// There is no legacy deployment of this contract
 		l1ERC721BridgeProxyDeployment, err := hh.GetDeployment("L1ERC721BridgeProxy")
 		if err != nil {
-			return err
+			return fmt.Errorf("cannot find L1ERC721BridgeProxy artifact: %w", err)
 		}
 		d.L1ERC721BridgeProxy = l1ERC721BridgeProxyDeployment.Address
 	}
@@ -485,7 +486,7 @@ func (d *DeployConfig) GetDeployedAddresses(hh *hardhat.Hardhat) error {
 	if d.SystemConfigProxy == (common.Address{}) {
 		systemConfigProxyDeployment, err := hh.GetDeployment("SystemConfigProxy")
 		if err != nil {
-			return err
+			return fmt.Errorf("cannot find SystemConfigProxy artifact: %w", err)
 		}
 		d.SystemConfigProxy = systemConfigProxyDeployment.Address
 	}
@@ -501,7 +502,7 @@ func (d *DeployConfig) GetDeployedAddresses(hh *hardhat.Hardhat) error {
 	if d.ValidatorPoolProxy == (common.Address{}) {
 		validatorPoolProxyDeployment, err := hh.GetDeployment("ValidatorPoolProxy")
 		if err != nil {
-			return err
+			return fmt.Errorf("cannot find ValidatorPoolProxy artifact: %w", err)
 		}
 		d.ValidatorPoolProxy = validatorPoolProxyDeployment.Address
 	}
@@ -813,7 +814,7 @@ func NewL2StorageConfig(config *DeployConfig, block *types.Block) (state.Storage
 		"msgNonce": 0,
 	}
 	storage["L2CrossDomainMessenger"] = state.StorageValues{
-		"_initialized":     initializedValue,
+		"_initialized":     InitializedValue,
 		"_initializing":    false,
 		"xDomainMsgSender": "0x000000000000000000000000000000000000dEaD",
 		"msgNonce":         0,

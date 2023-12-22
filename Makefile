@@ -36,7 +36,7 @@ golang-docker:
 	# We don't use a buildx builder here, and just load directly into regular docker, for convenience.
 	GIT_COMMIT=$$(git rev-parse HEAD) \
 	GIT_DATE=$$(git show -s --format='%ct') \
-	IMAGE_TAGS=$$GIT_COMMIT,latest \
+	IMAGE_TAGS=$$(git rev-parse HEAD),latest \
 	docker buildx bake \
 			--progress plain \
 			--load \
@@ -45,11 +45,7 @@ golang-docker:
 .PHONY: golang-docker
 
 submodules:
-	# CI will checkout submodules on its own (and fails on these commands)
-	if [ -z "$$GITHUB_ENV" ]; then \
-		git submodule init; \
-		git submodule update --recursive; \
-	fi
+	git submodule update --init --recursive
 .PHONY: submodules
 
 bindings:

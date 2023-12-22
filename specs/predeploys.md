@@ -26,7 +26,7 @@
 
 ## Overview
 
-[Predeployed smart contracts][g-predeployed-contract-predeploy] exist on Kroma
+[Predeployed smart contracts](./glossary.md#predeployed-contract-predeploy) exist on Kroma
 at predetermined addresses in the genesis state. They are  similar to precompiles but instead run
 directly in the EVM instead of running  native code outside of the EVM.
 
@@ -36,6 +36,10 @@ network forking.
 
 Predeploy addresses exist in 1 byte namespace `0x42000000000000000000000000000000000000xx`.
 Proxies are set at each possible predeploy address except for the `ProxyAdmin` and the `WETH9`.
+
+The following table includes each of the predeploys. The system version
+indicates when the predeploy was introduced. The possible values are `Legacy`
+or `Bedrock` or `Canyon`. Deprecated contracts should not be used.
 
 | Name                       | Address                                    | Proxied |
 |----------------------------|--------------------------------------------|---------|

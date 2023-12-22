@@ -7,25 +7,34 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"strings"
 
 	"golang.org/x/sync/errgroup"
 
 	"github.com/mattn/go-isatty"
 	"github.com/urfave/cli/v2"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
-
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/kroma-network/kroma/kroma-bindings/bindings"
 	"github.com/kroma-network/kroma/kroma-bindings/predeploys"
 	"github.com/kroma-network/kroma/kroma-chain-ops/genesis"
 	"github.com/kroma-network/kroma/op-chain-ops/clients"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/log"
 )
 
-var defaultCrossDomainMessageSender = common.HexToAddress("0x000000000000000000000000000000000000dead")
+var (
+	defaultCrossDomainMessageSender = common.HexToAddress("0x000000000000000000000000000000000000dead")
+	// errInvalidInitialized represents when the initialized value is not set to the expected value.
+	// This is an assertion on `_initialized`. We do not care about the value of `_initializing`.
+	errInvalidInitialized = errors.New("invalid initialized value")
+	// errAlreadyInitialized represents a revert from when a contract is already initialized.
+	// This error is used to assert with `eth_call` on contracts that are `Initializable`
+	errAlreadyInitialized = errors.New("Initializable: contract is already initialized")
+)
 
 // Default script for checking that L2 has been configured correctly. This should be extended in the future
 // to pull in L1 deploy artifacts and assert that the L2 state is consistent with the L1 state.
@@ -139,7 +148,7 @@ func checkPredeployConfig(client *ethclient.Client, name string) error {
 				return err
 			}
 			if impl != standardImpl {
-				log.Warn("%s does not have the standard implementation", name)
+				log.Warn(name + " does not have the standard implementation")
 			}
 			implCode, err := client.CodeAt(context.Background(), impl, nil)
 			if err != nil {
@@ -152,6 +161,8 @@ func checkPredeployConfig(client *ethclient.Client, name string) error {
 		})
 
 		// Ensure that the code is set to the proxy bytecode as expected
+		// This will not work against production networks where the bytecode
+		// has deviated from the current bytecode. We need a more reliable way to check for this.
 		g.Go(func() error {
 			proxyCode, err := client.CodeAt(context.Background(), p, nil)
 			if err != nil {
@@ -173,72 +184,73 @@ func checkPredeployConfig(client *ethclient.Client, name string) error {
 		switch p {
 		case predeploys.L2CrossDomainMessengerAddr:
 			if err := checkL2CrossDomainMessenger(p, client); err != nil {
-				return err
+				return fmt.Errorf("L2CrossDomainMessenger: %w", err)
 			}
 
 		case predeploys.GasPriceOracleAddr:
 			if err := checkGasPriceOracle(p, client); err != nil {
-				return err
+				return fmt.Errorf("GasPriceOracle: %w", err)
 			}
 
 		case predeploys.L2StandardBridgeAddr:
 			if err := checkL2StandardBridge(p, client); err != nil {
-				return err
+				return fmt.Errorf("L2StandardBridge: %w", err)
 			}
 
 		case predeploys.ValidatorRewardVaultAddr:
 			if err := checkValidatorRewardVault(p, client); err != nil {
-				return err
+				return fmt.Errorf("ValidatorRewardVault: %w", err)
 			}
 
 		case predeploys.KromaMintableERC20FactoryAddr:
 			if err := checkKromaMintableERC20Factory(p, client); err != nil {
-				return err
+				return fmt.Errorf("KromaMintableERC20Factory: %w", err)
+
 			}
 
 		case predeploys.L1BlockAddr:
 			if err := checkL1Block(p, client); err != nil {
-				return err
+				return fmt.Errorf("L1Block: %w", err)
 			}
 
 		case predeploys.WETH9Addr:
 			if err := checkWETH9(p, client); err != nil {
-				return err
+				return fmt.Errorf("WETH9: %w", err)
 			}
 
 		case predeploys.GovernanceTokenAddr:
 			if err := checkGovernanceToken(p, client); err != nil {
-				return err
+				return fmt.Errorf("GovernanceToken: %w", err)
 			}
 
 		case predeploys.L2ERC721BridgeAddr:
 			if err := checkL2ERC721Bridge(p, client); err != nil {
-				return err
+				return fmt.Errorf("L2ERC721Bridge: %w", err)
 			}
 
 		case predeploys.KromaMintableERC721FactoryAddr:
 			if err := checkKromaMintableERC721Factory(p, client); err != nil {
-				return err
+				return fmt.Errorf("KromaMintableERC721Factory: %w", err)
 			}
 
 		case predeploys.ProxyAdminAddr:
 			if err := checkProxyAdmin(p, client); err != nil {
-				return err
+				return fmt.Errorf("ProxyAdmin: %w", err)
 			}
 
 		case predeploys.ProtocolVaultAddr:
 			if err := checkProtocolVault(p, client); err != nil {
-				return err
+				return fmt.Errorf("ProtocolVault: %w", err)
 			}
 
 		case predeploys.L1FeeVaultAddr:
 			if err := checkL1FeeVault(p, client); err != nil {
-				return err
+				return fmt.Errorf("L1FeeVault: %w", err)
 			}
 
 		case predeploys.L2ToL1MessagePasserAddr:
 			if err := checkL2ToL1MessagePasser(p, client); err != nil {
-				return err
+				return fmt.Errorf("L2ToL1MessagePasser: %w", err)
 			}
 		}
 		return nil
@@ -792,4 +804,17 @@ func getStorageValue(name, entryName string, addr common.Address, client *ethcli
 		slice[i], slice[j] = slice[j], slice[i]
 	}
 	return slice[entry.Offset : entry.Offset+typ.NumberOfBytes], nil
+}
+
+// checkAlreadyInitialized will check if a contract has already been initialized
+// based on error message string matching.
+func checkAlreadyInitialized(addr common.Address, calldata []byte, client *ethclient.Client) error {
+	msg := ethereum.CallMsg{
+		To:   &addr,
+		Data: calldata,
+	}
+	if _, err := client.CallContract(context.Background(), msg, nil); !strings.Contains(err.Error(), errAlreadyInitialized.Error()) {
+		return err
+	}
+	return nil
 }

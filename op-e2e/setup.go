@@ -42,6 +42,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-batcher/compressor"
 	"github.com/ethereum-optimism/optimism/op-e2e/config"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils"
+	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/fakebeacon"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/geth"
 	"github.com/ethereum-optimism/optimism/op-e2e/testdata"
 	"github.com/ethereum-optimism/optimism/op-node/chaincfg"
@@ -81,9 +82,9 @@ func newTxMgrConfig(l1Addr string, privKey *ecdsa.PrivateKey) txmgr.CLIConfig {
 		ResubmissionTimeout:       3 * time.Second,
 		ReceiptQueryInterval:      50 * time.Millisecond,
 		NetworkTimeout:            2 * time.Second,
-		TxSendTimeout:             10 * time.Minute,
 		TxNotInMempoolTimeout:     2 * time.Minute,
 		// [Kroma: START]
+		TxSendTimeout:             10 * time.Minute,
 		TxBufferSize: 10,
 		// [Kroma: END]
 	}
@@ -97,7 +98,6 @@ func DefaultSystemConfig(t *testing.T) SystemConfig {
 	deployConfig := config.DeployConfig.Copy()
 	deployConfig.L1GenesisBlockTimestamp = hexutil.Uint64(time.Now().Unix())
 	deployConfig.L2GenesisCanyonTimeOffset = e2eutils.CanyonTimeOffset()
-	deployConfig.L2GenesisSpanBatchTimeOffset = e2eutils.SpanBatchTimeOffset()
 	require.NoError(t, deployConfig.Check(), "Deploy config is invalid, do you need to run make devnet-allocs?")
 	l1Deployments := config.L1Deployments.Copy()
 	require.NoError(t, l1Deployments.Check())
@@ -120,6 +120,7 @@ func DefaultSystemConfig(t *testing.T) SystemConfig {
 		L1InfoPredeployAddress: predeploys.L1BlockAddr,
 		JWTFilePath:            writeDefaultJWT(t),
 		JWTSecret:              testingJWTSecret,
+		BlobsPath:              t.TempDir(),
 		Nodes: map[string]*rollupNode.Config{
 			"sequencer": {
 				Driver: driver.Config{
@@ -187,6 +188,8 @@ type SystemConfig struct {
 	JWTFilePath string
 	JWTSecret   [32]byte
 
+	BlobsPath string
+
 	Premine         map[common.Address]*big.Int
 	Nodes           map[string]*rollupNode.Config // Per node config. Don't use populate rollup.Config
 	Loggers         map[string]log.Logger
@@ -212,6 +215,9 @@ type SystemConfig struct {
 
 	// Target L1 tx size for the batcher transactions
 	BatcherTargetL1TxSizeBytes uint64
+
+	// Max L1 tx size for the batcher transactions
+	BatcherMaxL1TxSizeBytes uint64
 
 	// SupportL1TimeTravel determines if the L1 node supports quickly skipping forward in time
 	SupportL1TimeTravel bool
@@ -274,6 +280,8 @@ type System struct {
 	Challenger     *validator.Validator
 	BatchSubmitter *bss.BatcherService
 	Mocknet        mocknet.Mocknet
+
+	L1BeaconAPIAddr string
 
 	// TimeTravelClock is nil unless SystemConfig.SupportL1TimeTravel was set to true
 	// It provides access to the clock instance used by the L1 node. Calling TimeTravelClock.AdvanceBy
@@ -447,6 +455,9 @@ func (cfg SystemConfig) Start(t *testing.T, _opts ...SystemConfigOption) (*Syste
 			RegolithTime:           cfg.DeployConfig.RegolithTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
 			CanyonTime:             cfg.DeployConfig.CanyonTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
 			SpanBatchTime:          cfg.DeployConfig.SpanBatchTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
+			// [Kroma: START]
+			// ProtocolVersionsAddress: cfg.L1Deployments.ProtocolVersionsProxy,
+			// [Kroma: END]
 		}
 	}
 	defaultConfig := makeRollupConfig()
@@ -455,8 +466,19 @@ func (cfg SystemConfig) Start(t *testing.T, _opts ...SystemConfigOption) (*Syste
 	}
 	sys.RollupConfig = &defaultConfig
 
+	// Create a fake Beacon node to hold on to blobs created by the L1 miner, and to serve them to L2
+	bcn := fakebeacon.NewBeacon(testlog.Logger(t, log.LvlInfo).New("role", "l1_cl"),
+		path.Join(cfg.BlobsPath, "l1_cl"), l1Genesis.Timestamp, cfg.DeployConfig.L1BlockTime)
+	t.Cleanup(func() {
+		_ = bcn.Close()
+	})
+	require.NoError(t, bcn.Start("127.0.0.1:0"))
+	beaconApiAddr := bcn.BeaconAddr()
+	require.NotEmpty(t, beaconApiAddr, "beacon API listener must be up")
+
 	// Initialize nodes
-	l1Node, l1Backend, err := geth.InitL1(cfg.DeployConfig.L1ChainID, cfg.DeployConfig.L1BlockTime, l1Genesis, c, cfg.GethOptions["l1"]...)
+	l1Node, l1Backend, err := geth.InitL1(cfg.DeployConfig.L1ChainID, cfg.DeployConfig.L1BlockTime, l1Genesis, c,
+		path.Join(cfg.BlobsPath, "l1_el"), bcn, cfg.GethOptions["l1"]...)
 	if err != nil {
 		return nil, err
 	}
@@ -788,9 +810,13 @@ func (cfg SystemConfig) Start(t *testing.T, _opts ...SystemConfigOption) (*Syste
 		return nil, fmt.Errorf("unable to start challenger: %w", err)
 	}
 
-	batchType := derive.SingularBatchType
-	if os.Getenv("OP_E2E_USE_SPAN_BATCH") == "true" {
+	var batchType uint = derive.SingularBatchType
+	if cfg.DeployConfig.L2GenesisSpanBatchTimeOffset != nil && *cfg.DeployConfig.L2GenesisSpanBatchTimeOffset == hexutil.Uint64(0) {
 		batchType = derive.SpanBatchType
+	}
+	batcherMaxL1TxSizeBytes := cfg.BatcherMaxL1TxSizeBytes
+	if batcherMaxL1TxSizeBytes == 0 {
+		batcherMaxL1TxSizeBytes = 240_000
 	}
 	batcherCLIConfig := &bss.CLIConfig{
 		L1EthRpc:               sys.EthInstances["l1"].WSEndpoint(),
@@ -798,7 +824,7 @@ func (cfg SystemConfig) Start(t *testing.T, _opts ...SystemConfigOption) (*Syste
 		RollupRpc:              sys.RollupNodes["sequencer"].HTTPEndpoint(),
 		MaxPendingTransactions: 0,
 		MaxChannelDuration:     1,
-		MaxL1TxSize:            240_000,
+		MaxL1TxSize:            batcherMaxL1TxSizeBytes,
 		CompressorConfig: compressor.CLIConfig{
 			TargetL1TxSizeBytes: cfg.BatcherTargetL1TxSizeBytes,
 			TargetNumFrames:     1,
@@ -812,7 +838,7 @@ func (cfg SystemConfig) Start(t *testing.T, _opts ...SystemConfigOption) (*Syste
 			Format: oplog.FormatText,
 		},
 		Stopped:   sys.cfg.DisableBatcher, // Batch submitter may be enabled later
-		BatchType: uint(batchType),
+		BatchType: batchType,
 	}
 	// Batch Submitter
 	batcher, err := bss.BatcherServiceFromCLIConfig(context.Background(), "0.0.1", batcherCLIConfig, sys.cfg.Loggers["batcher"])

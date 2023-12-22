@@ -1,22 +1,17 @@
 # Deposits
 
 <!-- All glossary references in this file. -->
-
+[g-transaction-type]: glossary.md#transaction-type
 [g-derivation]:  glossary.md#L2-chain-derivation
 [g-deposited]: glossary.md#deposited-transaction
 [g-deposits]: glossary.md#deposits
+[g-l1-attr-deposit]: glossary.md#l1-attributes-deposited-transaction
+[g-user-deposited]: glossary.md#user-deposited-transaction
 [g-eoa]: glossary.md#eoa
 [g-exec-engine]: glossary.md#execution-engine
-[g-l1]: glossary.md#layer-1-l1
-[g-l1-attr-deposit]: glossary.md#l1-attributes-deposited-transaction
-[g-l2]: glossary.md#layer-2-l2
-[g-sequencer]: glossary.md#sequencer
-[g-user-deposited]: glossary.md#user-deposited-transaction
-[g-transaction-type]: glossary.md#transaction-type
-[g-validator-reward]: glossary.md#validator-reward
 
 [Deposited transactions][g-deposited], also known as [deposits][g-deposits] are transactions which
-are initiated on [L1][g-l1], and executed on [L2][g-l2]. This document outlines a new [transaction
+are initiated on L1, and executed on L2. This document outlines a new [transaction
 type][g-transaction-type] for deposits. It also describes how deposits are initiated on L1, along
 with the authorization and validation conditions on L2.
 
@@ -53,14 +48,14 @@ with the authorization and validation conditions on L2.
 [Deposited transactions][g-deposited] have the following notable distinctions from existing
 transaction types:
 
-1. They are derived from L1 blocks, and must be included as part of the protocol.
+1. They are derived from Layer 1 blocks, and must be included as part of the protocol.
 2. They do not include signature validation (see [User-Deposited Transactions][user-deposited]
    for the rationale).
 3. They buy their L2 gas on L1 and, as such, the L2 gas is not refundable.
 
 We define a new [EIP-2718] compatible transaction type with the prefix `0x7E` to represent a deposit transaction.
 
-A deposit has the following fields.
+A deposit has the following fields
 (rlp encoded in the order they appear here):
 
 [EIP-2718]: https://eips.ethereum.org/EIPS/eip-2718
@@ -71,14 +66,17 @@ A deposit has the following fields.
   deposited transaction is a contract creation.
 - `uint256 mint`: The ETH value to mint on L2.
 - `uint256 value`: The ETH value to send to the recipient account.
+- `uint64 gas`: The gasLimit for the L2 transaction.
 - `bytes data`: The input data.
-- `uint64 gasLimit`: The gasLimit for the L2 transaction.
+
+> Note that unlike Optimism, `isSystemTx` does not exists in Kroma transaction.
 
 In contrast to [EIP-155] transactions, this transaction type:
 
 - Does not include a `nonce`, since it is identified by the `sourceHash`.
   API responses still include a `nonce` attribute:
-  - the `nonce` is set to the `depositNonce` attribute of the corresponding transaction receipt.
+  - Before Regolith: the `nonce` is always `0`
+  - With Regolith: the `nonce` is set to the `depositNonce` attribute of the corresponding transaction receipt.
 - Does not include signature information, and makes the `from` address explicit.
   API responses contain zeroed signature `v`, `r`, `s` values for backwards compatibility.
 - Includes new `sourceHash`, `from`, and `mint` attributes.
@@ -129,6 +127,8 @@ software, and complexity in general.
 
 ### Validation and Authorization of Deposited Transactions
 
+[authorization]: #validation-and-authorization-of-deposited-transaction
+
 As noted above, the deposited transaction type does not include a signature for validation. Rather,
 authorization is handled by the [L2 chain derivation][g-derivation] process, which when correctly
 applied will only derive transactions with a `from` address attested to by the logs of the [L1
@@ -149,7 +149,7 @@ The deposit transaction is processed exactly like a type-3 (EIP-1559) transactio
 - No fee fields are verified: the deposit does not have any, as it pays for gas on L1.
 - No `nonce` field is verified: the deposit does not have any, it's uniquely identified by its `sourceHash`.
 - No access-list is processed: the deposit has no access-list, and it is thus processed as if the access-list is empty.
-- No check if `from` is an Externally Owner Account (EOA): the deposit is ensured not to be an EAO through L1 address
+- No check if `from` is an Externally Owner Account (EOA): the deposit is ensured not to be an EOA through L1 address
   masking, this may change in future L1 contract-deployments to e.g. enable an account-abstraction like mechanism.
 - No gas is refunded as ETH. (either by not refunding or utilizing the fact the gas-price of the deposit is `0`)
 - No transaction priority fee is charged. No payment is made to the block fee-recipient.
@@ -171,10 +171,11 @@ Any non-EVM state-transition error emitted by the EVM execution is processed in 
 
 Finally, after the above processing, the execution post-processing runs the same:
 i.e. the gas pool and receipt are processed identical to a regular transaction.
-The receipt of deposit transactions is extended with an additional `depositNonce` value, storing the `nonce` value
-of the `from` sender as registered *before* the EVM processing.
+Starting with the Regolith upgrade however, the receipt of deposit transactions is extended with an additional
+`depositNonce` value, storing the `nonce` value of the `from` sender as registered *before* the EVM processing.
 
-Note that the gas used as stated by the execution output is subtracted from the gas pool.
+Note that the gas used as stated by the execution output is subtracted from the gas pool,
+but this execution output value has special edge cases before the Regolith upgrade.
 
 Note for application developers: because `CALLER` and `ORIGIN` are set to `from`, the
 semantics of using the `tx.origin == msg.sender` check will not work to determine whether
@@ -204,9 +205,13 @@ The RLP-encoded consensus-enforced fields are:
 - `postStateOrStatus` (standard): this contains the transaction status, see [EIP-658].
 - `cumulativeGasUsed` (standard): gas used in the block thus far, including this transaction.
   - The actual gas used is derived from the difference in `CumulativeGasUsed` with the previous transaction.
+  - Starting with Regolith, this accounts for the actual gas usage by the deposit, like regular transactions.
 - `bloom` (standard): bloom filter of the transaction logs.
 - `logs` (standard): log events emitted by the EVM processing.
-- `depositNonce` (unique extension): The deposit transaction persists the nonce used during execution.
+- `depositNonce` (unique extension): Optional field. The deposit transaction persists the nonce used during execution.
+- `depositNonceVersion` (unique extension): Optional field. The value must be 1 if the field is present
+  - Before Canyon, these `depositNonce` & `depositNonceVersion` fields must always be omitted.
+  - With Canyon, these `depositNonce` & `depositNonceVersion` fields must always be included.
 
 The receipt API responses utilize the receipt changes for more accurate response data:
 
@@ -227,7 +232,7 @@ attributes predeployed contract][predeploy].
 This transaction MUST have the following values:
 
 1. `from` is `0xdeaddeaddeaddeaddeaddeaddeaddeaddead0001` (the address of the
-[L1 Attributes depositor account][depositor-account]).
+[L1 Attributes depositor account][depositor-account])
 2. `to` is `0x4200000000000000000000000000000000000002` (the address of the [L1 attributes predeployed
    contract][predeploy]).
 3. `mint` is `0`.
@@ -307,7 +312,7 @@ file will be located in the `deployedBytecode` field of the build artifacts file
 
 [User-deposited transactions][g-user-deposited] are [deposited transactions][deposited-tx-type]
 generated by the [L2 Chain Derivation][g-derivation] process. The content of each user-deposited
-transaction is determined by the corresponding `TransactionDeposited` event emitted by the
+transaction are determined by the corresponding `TransactionDeposited` event emitted by the
 [deposit contract][deposit-contract] on L1.
 
 1. `from` is unchanged from the emitted value (though it may
@@ -316,7 +321,7 @@ transaction is determined by the corresponding `TransactionDeposited` event emit
     - In case of a contract creation (cf. `isCreation`), this address is set to `null`.
 3. `mint` is set to the emitted value.
 4. `value` is set to the emitted value.
-5. `gaslimit` is unchanged from the emitted value. It must be at least `21000`.
+5. `gaslimit` is unchanged from the emitted value. It must be at least 21000.
 6. `isCreation` is set to `true` if the transaction is a contract creation, `false` otherwise.
 7. `data` is unchanged from the emitted value. Depending on the value of `isCreation` it is handled
    as either calldata or contract initialization code.
@@ -348,7 +353,7 @@ If the caller is a contract, the address will be transformed by adding
 Solidity `uint160` so the value will overflow. This prevents attacks in which a
 contract on L1 has the same address as a contract on L2 but doesn't have the same code. We can safely ignore this
 for EOAs because they're guaranteed to have the same "code" (i.e. no code at all). This also makes
-it possible for users to interact with contracts on L2 even when the [Sequencer][g-sequencer] is down.
+it possible for users to interact with contracts on L2 even when the Sequencer is down.
 
 #### Deposit Contract Implementation: Kroma Portal
 

@@ -2,10 +2,11 @@ package op_e2e
 
 import (
 	"context"
-	"github.com/ethereum/go-ethereum/core/vm"
 	"math/big"
 	"testing"
 	"time"
+
+	"github.com/ethereum/go-ethereum/core/vm"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
@@ -73,7 +74,6 @@ func TestMintOnRevertedDeposit(t *testing.T) {
 }
 
 func TestDepositTxCreateContract(t *testing.T) {
-	t.Skip() // NOTE: temporary skip
 	InitParallel(t)
 	cfg := DefaultSystemConfig(t)
 	delete(cfg.Nodes, "verifier")

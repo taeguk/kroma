@@ -47,6 +47,31 @@ import (
 	chal "github.com/kroma-network/kroma/kroma-validator/challenge"
 )
 
+// TestSystemBatchType run each system e2e test case in singular batch mode and span batch mode.
+// If the test case tests batch submission and advancing safe head, it should be tested in both singular and span batch mode.
+func TestSystemBatchType(t *testing.T) {
+	tests := []struct {
+		name string
+		f    func(gt *testing.T, spanBatchTimeOffset *hexutil.Uint64)
+	}{
+		{"StopStartBatcher", StopStartBatcher},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name+"_SingularBatch", func(t *testing.T) {
+			test.f(t, nil)
+		})
+	}
+
+	spanBatchTimeOffset := hexutil.Uint64(0)
+	for _, test := range tests {
+		test := test
+		t.Run(test.name+"_SpanBatch", func(t *testing.T) {
+			test.f(t, &spanBatchTimeOffset)
+		})
+	}
+}
+
 func TestMain(m *testing.M) {
 	if config.ExternalL2Shim != "" {
 		fmt.Println("Running tests with external L2 process adapter at ", config.ExternalL2Shim)
@@ -178,6 +203,22 @@ func TestValidationReward(t *testing.T) {
 	}
 }
 
+func TestSystemE2EDencunAtGenesis(t *testing.T) {
+	InitParallel(t)
+
+	cfg := DefaultSystemConfig(t)
+	genesisActivation := uint64(0)
+	cfg.DeployConfig.L1CancunTimeOffset = &genesisActivation
+
+	sys, err := cfg.Start(t)
+	require.Nil(t, err, "Error starting up system")
+	defer sys.Close()
+	runE2ESystemTest(t, sys)
+	head, err := sys.Clients["l1"].BlockByNumber(context.Background(), big.NewInt(0))
+	require.NoError(t, err)
+	require.NotNil(t, head.ExcessBlobGas(), "L1 is building dencun blocks since genesis")
+}
+
 // TestSystemE2E sets up a L1 Geth node, a rollup node, and a L2 geth node and then confirms that L1 deposits are reflected on L2.
 // All nodes are run in process (but are the full nodes, not mocked or stubbed).
 func TestSystemE2E(t *testing.T) {
@@ -188,7 +229,9 @@ func TestSystemE2E(t *testing.T) {
 	sys, err := cfg.Start(t)
 	require.Nil(t, err, "Error starting up system")
 	defer sys.Close()
+}
 
+func runE2ESystemTest(t *testing.T, sys *System) {
 	log := testlog.Logger(t, log.LvlInfo)
 	log.Info("genesis", "l2", sys.RollupConfig.Genesis.L2, "l1", sys.RollupConfig.Genesis.L1, "l2_time", sys.RollupConfig.Genesis.L2Time)
 
@@ -208,11 +251,11 @@ func TestSystemE2E(t *testing.T) {
 	require.Nil(t, err)
 
 	// Send deposit transaction
-	opts, err := bind.NewKeyedTransactorWithChainID(ethPrivKey, cfg.L1ChainIDBig())
+	opts, err := bind.NewKeyedTransactorWithChainID(ethPrivKey, sys.cfg.L1ChainIDBig())
 	require.Nil(t, err)
 	mintAmount := big.NewInt(1_000_000_000_000)
 	opts.Value = mintAmount
-	SendDepositTx(t, cfg, l1Client, l2Verif, opts, func(l2Opts *DepositTxOpts) {})
+	SendDepositTx(t, sys.cfg, l1Client, l2Verif, opts, func(l2Opts *DepositTxOpts) {})
 
 	// Confirm balance
 	ctx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
@@ -225,7 +268,7 @@ func TestSystemE2E(t *testing.T) {
 	require.Equal(t, mintAmount, diff, "Did not get expected balance change")
 
 	// Submit TX to L2 sequencer node
-	receipt := SendL2Tx(t, cfg, l2Seq, ethPrivKey, func(opts *TxOpts) {
+	receipt := SendL2Tx(t, sys.cfg, l2Seq, ethPrivKey, func(opts *TxOpts) {
 		opts.Value = big.NewInt(1_000_000_000)
 		opts.Nonce = 1 // Already have deposit
 		opts.ToAddr = &common.Address{0xff, 0xff}
@@ -1141,7 +1184,6 @@ func TestFees(t *testing.T) {
 	l2Verif := sys.Clients["verifier"]
 	l1 := sys.Clients["l1"]
 
-	// TODO read
 	config := &params.ChainConfig{
 		Kroma: &params.KromaConfig{
 			EIP1559Elasticity:  cfg.DeployConfig.EIP1559Elasticity,
@@ -1162,7 +1204,9 @@ func TestFees(t *testing.T) {
 	ethPrivKey := cfg.Secrets.Alice
 	fromAddr := crypto.PubkeyToAddress(ethPrivKey.PublicKey)
 
+	// [Kroma: START]
 	// require.NotEqual(t, cfg.DeployConfig.L2OutputOracleProposer, fromAddr)
+	// [Kroma: END]
 	require.NotEqual(t, cfg.DeployConfig.BatchSenderAddress, fromAddr)
 
 	// Find gaspriceoracle contract
@@ -1191,6 +1235,14 @@ func TestFees(t *testing.T) {
 	// Check balance of ValidatorRewardVault
 	validatorRewardVaultStartBalance, err := l2Seq.BalanceAt(context.Background(), predeploys.ValidatorRewardVaultAddr, big.NewInt(rpc.EarliestBlockNumber.Int64()))
 	require.Nil(t, err)
+
+	// [Kroma: START]
+	// genesisBlock, err := l2Seq.BlockByNumber(context.Background(), big.NewInt(rpc.EarliestBlockNumber.Int64()))
+	// require.NoError(t, err)
+	//
+	// coinbaseStartBalance, err := l2Seq.BalanceAt(context.Background(), genesisBlock.Coinbase(), big.NewInt(rpc.EarliestBlockNumber.Int64()))
+	// require.NoError(t, err)
+	// [Kroma: END]
 
 	// Simple transfer from signer to random account
 	startBalance, err := l2Seq.BalanceAt(context.Background(), fromAddr, big.NewInt(rpc.EarliestBlockNumber.Int64()))
@@ -1286,10 +1338,11 @@ func TestFees(t *testing.T) {
 	require.Equal(t, balanceDiff, totalFee, "balances should add up")
 }
 
-func TestStopStartBatcher(t *testing.T) {
+func StopStartBatcher(t *testing.T, spanBatchTimeOffset *hexutil.Uint64) {
 	InitParallel(t)
 
 	cfg := DefaultSystemConfig(t)
+	cfg.DeployConfig.L2GenesisSpanBatchTimeOffset = spanBatchTimeOffset
 	sys, err := cfg.Start(t)
 	require.Nil(t, err, "Error starting up system")
 	defer sys.Close()
@@ -1323,6 +1376,7 @@ func TestStopStartBatcher(t *testing.T) {
 	safeBlockInclusionDuration := time.Duration(6*cfg.DeployConfig.L1BlockTime) * time.Second
 	_, err = geth.WaitForBlock(receipt.BlockNumber, l2Verif, safeBlockInclusionDuration)
 	require.Nil(t, err, "Waiting for block on verifier")
+	require.NoError(t, wait.ForProcessingFullBatch(context.Background(), rollupClient))
 
 	// ensure the safe chain advances
 	newSeqStatus, err := rollupClient.SyncStatus(context.Background())
@@ -1360,6 +1414,7 @@ func TestStopStartBatcher(t *testing.T) {
 	// wait until the block the tx was first included in shows up in the safe chain on the verifier
 	_, err = geth.WaitForBlock(receipt.BlockNumber, l2Verif, safeBlockInclusionDuration)
 	require.Nil(t, err, "Waiting for block on verifier")
+	require.NoError(t, wait.ForProcessingFullBatch(context.Background(), rollupClient))
 
 	// ensure that the safe chain advances after restarting the batcher
 	newSeqStatus, err = rollupClient.SyncStatus(context.Background())
@@ -1586,10 +1641,8 @@ func TestRuntimeConfigReload(t *testing.T) {
 	require.NoError(t, err)
 	newUnsafeBlocksSigner := common.Address{0x12, 0x23, 0x45}
 	require.NotEqual(t, initialRuntimeConfig.P2PSequencerAddress(), newUnsafeBlocksSigner, "changing to a different address")
-	opts, err := bind.NewKeyedTransactorWithChainID(cfg.Secrets.CliqueSigner, cfg.L1ChainIDBig())
+	opts, err := bind.NewKeyedTransactorWithChainID(cfg.Secrets.SysCfgOwner, cfg.L1ChainIDBig())
 	require.Nil(t, err)
-	owner, _ := sysCfgContract.Owner(nil)
-	fmt.Printf("system config owner address: %s\n", owner)
 	// the unsafe signer address is part of the runtime config
 	tx, err := sysCfgContract.SetUnsafeBlockSigner(opts, newUnsafeBlocksSigner)
 	require.NoError(t, err)
@@ -1725,3 +1778,14 @@ func TestRuntimeConfigReload(t *testing.T) {
 // 	t.Log("verified that op-geth closed!")
 // }
 // [Kroma: END]
+
+func TestIncorrectBatcherConfiguration(t *testing.T) {
+	InitParallel(t)
+
+	cfg := DefaultSystemConfig(t)
+	// make the batcher configuration invalid
+	cfg.BatcherMaxL1TxSizeBytes = 1
+
+	_, err := cfg.Start(t)
+	require.Error(t, err, "Expected error on invalid batcher configuration")
+}
